@@ -65,7 +65,7 @@ sequenceDiagram
     Note over C,S: balance low → top-up 402 cycle<br/>stream never drops
 
     C->>S: POST /close
-    S->>H: HIP-991 settlement anchor<br/>(seller pays the buyer)
+    S->>H: HIP-991 settlement anchor<br/>(costs the seller ~0.73 ℏ)
     H-->>S: anchor landed
     S->>H: refund unused credits
     S-->>C: signed receipt (JWS/ES256K)
@@ -100,11 +100,11 @@ flowchart LR
     end
     E[SSE events] --> A
     A -->|"final seq + consensus running_hash"| B
-    B -->|"custom fee"| BUY["Buyer's account"]
+    B -->|"~0.73 ℏ network fee"| NET["Hedera network<br/>(irrecoverable)"]
     B --> R[Refund released]
 
     style T1 stroke-dasharray: 4
-    style BUY fill:#1a7f37,color:#fff
+    style NET fill:#1a7f37,color:#fff
 ```
 
 Tier 2 embeds tier 1's final `sequence_number` and consensus `running_hash`, so burn

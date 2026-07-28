@@ -50,7 +50,7 @@ console.log(`consumed     : ${out.consumedAmount} tinybar`);
 console.log(`refund       : ${out.refundAmount} tinybar`);
 console.log(`burn ckpts   : ${out.burnCheckpoints}`);
 console.log(`settlement tx: ${out.settlementTxUrl}`);
-console.log(`  -> paid to buyer via HIP-991 custom fee: ${out.settlementPaidToBuyerTinybar} tinybar`);
+console.log(`  -> HIP-991 anchor fee (fixed collector): ${out.settlementPaidToBuyerTinybar} tinybar`);
 console.log(`refund tx    : ${out.refundTxUrl ?? "(nothing unused)"}`);
 
 writeFileSync("last-session.json", JSON.stringify({

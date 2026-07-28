@@ -13,7 +13,7 @@ limitation: not streaming, not multi-hop routing. Prepaid metered sessions close
 pays once through a standard exact-scheme cycle, receives credits, and consumes events until the
 balance runs low, at which point the client tops up without dropping the connection. Consumption is
 checkpointed to a consensus topic so the bill can be recomputed by anyone from the public mirror
-node, and the settlement anchor charges the seller a fee paid directly to the buyer.`
+node, and writing the settlement anchor costs the seller real network fees it cannot recover.`
   .split(/\s+/);
 
 export const llm = {

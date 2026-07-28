@@ -142,7 +142,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           refundTinybar: out.refundAmount,
           cause: out.cause,
           settlementAnchor: out.settlementTxUrl,
-          paidToBuyerByCustomFee: out.settlementPaidToBuyerTinybar,
+          anchorFeeTinybar: out.settlementFeeTinybar,
           refundTx: out.refundTxUrl,
           burnCheckpoints: out.burnCheckpoints,
         });

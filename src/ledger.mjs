@@ -7,7 +7,10 @@
 //   and a commitment over the event IDs the client actually received.
 //
 // Tier 2 — SETTLEMENT ANCHOR (HIP-991 fee-charging topic, ~$0.050/write, rare)
-//   Written once at session close. The seller PAYS THE BUYER to write it.
+//   Written once at session close. Writing it costs the seller ~0.7345 HBAR in
+//   irrecoverable NETWORK fees — that is the incentive against over-reporting.
+//   The topic's custom fee goes to a collector fixed at topic creation, which is
+//   NOT the paying buyer unless you deliberately configure it that way.
 //   It is a protocol-enforced precondition: no refund is issued until this
 //   message lands, so the seller cannot walk away with the unused balance
 //   without paying to publish its final numbers on an immutable ledger whose
@@ -86,9 +89,10 @@ export async function writeCheckpoint(ctx, {
 }
 
 /**
- * Tier 2: the settlement anchor. Costs the seller ~$0.050, of which the
- * custom fee is paid directly to the buyer. Refund MUST NOT be issued
- * before this lands — see settleSession().
+ * Tier 2: the settlement anchor. Costs the seller ~0.7345 HBAR in network fees
+ * it cannot recover. The custom fee goes to a fixed collector set at topic
+ * creation — not to the paying buyer. The anchor gates the SELLER'S claim; a
+ * failed anchor must NOT block the buyer's refund (see settleSession).
  */
 export async function writeSettlement(ctx, {
   sessionId, payer, fundingTxIds, pricePerEvent, totalBurned, unusedTinybar,

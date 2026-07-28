@@ -99,7 +99,7 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
       return {
         consumedTinybar: r.consumedAmount, refundTinybar: r.refundAmount,
         settlementTx: r.settlementTx, refundTx: r.refundTxUrl,
-        paidToBuyerByCustomFee: r.settlementPaidToBuyerTinybar,
+        anchorFeeTinybar: r.settlementFeeTinybar,
         burnCheckpoints: r.burnCheckpoints,
       };
     },

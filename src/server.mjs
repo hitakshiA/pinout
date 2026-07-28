@@ -387,6 +387,23 @@ app.use("/session/:id/*", async (c, next) => {
 
 // Admission control runs BEFORE the payment gate. Refusing after taking money
 // would be worse than refusing at all.
+app.use("/session", async (c, next) => {
+  if (c.req.method !== "POST") return next();
+  // Refuse BEFORE the payment gate. Taking money and then rejecting is worse
+  // than rejecting outright.
+  if (c.req.query("lane")) {
+    return c.json({
+      error: "compute lanes are not sold on this route",
+      detail: "POST /compute/<lane> prices each lane inside the 402 you sign",
+      lanes: Object.keys(LANES),
+    }, 400);
+  }
+  const active = [...sessions.values()].filter((x) => x.state !== "CLOSED");
+  const refusal = await admitAsync({ lane: null, activeSessions: active.length, activeGpu: 0 });
+  if (refusal) return c.json(refusal, refusal.status);
+  await next();
+});
+
 app.use("/compute/:lane", async (c, next) => {
   const lane = c.req.param("lane");
   if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}`, lanes: Object.keys(LANES) }, 404);
@@ -505,11 +522,21 @@ app.post("/session", async (c) => {
   const pay = paymentContext(c);
   if (!pay) return c.json({ error: "no verified payment" }, 402);
 
-  // The lane is fixed for the life of the session: it determined the price the
-  // buyer just paid, so it cannot change afterwards.
-  let pricing;
-  try { pricing = lanePricing(c.req.query("lane")); }
-  catch (e) { return c.json({ error: e.message }, 400); }
+  // /session is a FLAT-priced route. It must NEVER credit at lane value.
+  //
+  // Accepting ?lane= here priced the 402 at CONFIG.sessionTinybar (400,000) but
+  // credited lanePricing(lane).sessionTinybar (up to 17,640,000 for cpu-4), and
+  // the unused balance was refunded on-chain — so a buyer extracted many times
+  // what they paid. Compute lanes are sold ONLY through /compute/:lane, where
+  // the price is committed inside the 402 the buyer signs.
+  if (c.req.query("lane")) {
+    return c.json({
+      error: "compute lanes are not sold on this route",
+      detail: "POST /compute/<lane> prices each lane in the 402 you sign",
+      lanes: Object.keys(LANES),
+    }, 400);
+  }
+  const pricing = lanePricing(null);   // token-billed only, always flat-priced
 
   const s = new Session({
     payer: pay.payer,
@@ -525,6 +552,12 @@ app.post("/session", async (c) => {
   // self-sabotage rather than theft, but a public backdoor regardless).
   if (c.req.query("cheat") && String(env.ALLOW_CHEAT ?? "false") === "true") {
     s.cheat = Number(c.req.query("cheat"));
+  }
+  // Invariant: never credit more than this route's 402 actually charged.
+  // A mismatch here is a refundable-balance exploit, so fail loudly.
+  if (pricing.sessionTinybar !== CONFIG.sessionTinybar) {
+    console.error(`PRICING MISMATCH on /session: credit ${pricing.sessionTinybar} vs charged ${CONFIG.sessionTinybar}`);
+    return c.json({ error: "internal pricing mismatch" }, 500);
   }
   const res = s.credit(pay.key, pricing.sessionTinybar);
   sessions.set(s.id, s);
@@ -694,6 +727,10 @@ app.post("/session/:id/close", async (c) => {
     settlementTx: out.settlement?.txId ?? null,
     settlementTxUrl: out.settlement ? hashscan.tx(out.settlement.txId) : null,
     settlementFeeTinybar: out.settlement?.paidToBuyer,
+    // retained for consumers written against the old name; see the correction
+    // note below about who actually collects this fee
+    settlementPaidToBuyerTinybar: out.settlement?.paidToBuyer,
+    settlementFeeCollector: env.ANCHOR_FEE_COLLECTOR ?? "fixed at topic creation",
     refundTxUrl: out.refund ? hashscan.tx(out.refund.txId) : null,
     burnCheckpoints: s.checkpoints.length,
   });

@@ -161,14 +161,14 @@ class CloseSessionTool extends PinoutBaseTool {
       refundTinybar: r.refundAmount,
       cause: r.cause,
       settlementAnchor: r.settlementTxUrl,
-      paidToBuyerByCustomFee: r.settlementPaidToBuyerTinybar,
+      anchorFeeTinybar: r.settlementFeeTinybar,
       refundTx: r.refundTxUrl,
       burnCheckpoints: r.burnCheckpoints,
       receipt: r.receipt,
     },
       `Closed. Consumed ${r.consumedAmount} tinybar, refunded ${r.refundAmount}. ` +
       `Settlement anchor on-chain; seller paid the buyer ` +
-      `${r.settlementPaidToBuyerTinybar} tinybar via the HIP-991 topic fee.`);
+      `${r.settlementPaidToBuyerTinybar} tinybar HIP-991 topic fee (to the fixed collector, not the buyer).`);
   }
 }
 

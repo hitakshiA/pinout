@@ -158,10 +158,10 @@ anything or trusting the seller.
 
 | Role | Account | Notes |
 | --- | --- | --- |
-| Buyer / treasury | `0.0.9795418` | ECDSA, hydrated; HIP-991 fee collector |
+| Treasury (also the buyer in our own tests) | `0.0.9795418` | ECDSA, hydrated; the FIXED HIP-991 fee collector — a third-party buyer receives nothing from it |
 | Seller | `0.0.9795817` | ECDSA, key published at creation |
 | Burn ledger topic | `0.0.9795896` | plain HCS |
-| Settlement anchor topic | `0.0.9795865` | HIP-991, fee → buyer |
+| Settlement anchor topic | `0.0.9795865` | HIP-991; custom fee → fixed collector `0.0.9795418`, NOT the paying buyer |
 
 ---
 
