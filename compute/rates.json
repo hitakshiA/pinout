@@ -1,46 +1,62 @@
 {
-  "_note": "Credit price = 1 second of compute held. Margins assume the provider cost shown.",
-  "hbarUsd": 0.068801,
-  "_hbarUsdSource": "Hedera mirror node /api/v1/network/exchangerate at time of writing; resolve live at runtime",
+  "_note": "1 credit = 1 second of compute held. Costs are ALL-IN: accelerator + vCPU + RAM.",
+  "_hbarUsd": 0.068801,
+  "_hbarUsdSource": "resolve live from mirror node /api/v1/network/exchangerate; this is a snapshot",
+  "_providerRatesVerified": {
+    "daytona": "vCPU $0.000014/s, RAM $0.0000045/GiB/s, disk $0.00000003/GiB/s (5GB free)",
+    "modal": "SANDBOX rates: CPU $0.00003942/core/s, RAM $0.00000667/GiB/s (~3x standard task rates)"
+  },
+  "_budget": {
+    "daytona": 200,
+    "modal": 30
+  },
   "lanes": {
     "cpu-small": {
       "provider": "daytona",
       "vcpu": 1,
-      "memMiB": 1024,
+      "memGiB": 1,
       "diskGiB": 3,
-      "providerCostPerSecUsd": null,
-      "_costVerified": false,
-      "_costNote": "Daytona does not publish per-resource container rates. Confirm vCPU/h, RAM GiB/h, disk GiB/h in the dashboard before pricing.",
-      "creditTinybar": null
+      "providerCostPerSecUsd": 1.85e-05,
+      "creditTinybar": 30000,
+      "marginPct": 10,
+      "_costVerified": true
+    },
+    "cpu-4": {
+      "provider": "daytona",
+      "vcpu": 4,
+      "memGiB": 8,
+      "diskGiB": 10,
+      "providerCostPerSecUsd": 9.2e-05,
+      "creditTinybar": 147000,
+      "marginPct": 10,
+      "_costVerified": true
     },
     "gpu-t4": {
       "provider": "modal",
       "gpu": "T4",
       "vcpu": 2,
-      "memMiB": 8192,
-      "providerCostPerSecUsd": 0.000257,
-      "_costVerified": true,
-      "_costBreakdown": {
-        "gpuT4": 0.000164,
-        "cpu_1_physical_core": 3.942e-05,
-        "mem_8GiB": 5.336e-05,
-        "_note": "Modal SANDBOX cpu/mem rates, which are ~3x standard task rates"
-      },
-      "creditTinybar": 410000
+      "memGiB": 8,
+      "providerCostPerSecUsd": 0.00025678,
+      "creditTinybar": 411000,
+      "marginPct": 10,
+      "_costVerified": true
     },
     "gpu-a100-40": {
       "provider": "modal",
       "gpu": "A100-40GB",
       "vcpu": 4,
-      "memMiB": 16384,
-      "providerCostPerSecUsd": 0.000796,
-      "_costVerified": true,
-      "_costBreakdown": {
-        "gpuA100_40": 0.000583,
-        "cpu_2_cores": 7.884e-05,
-        "mem_16GiB": 0.00010672
-      },
-      "creditTinybar": 1270000
+      "memGiB": 16,
+      "providerCostPerSecUsd": 0.00076856,
+      "creditTinybar": 1229000,
+      "marginPct": 10,
+      "_costVerified": true
     }
+  },
+  "_laneSplit": "Daytona = CPU only (no GPU on this plan). Modal = GPU only.",
+  "_gpuBudget": {
+    "totalUsd": 30,
+    "t4RunwayHours": 32.5,
+    "a100RunwayHours": 10.8,
+    "_note": "GPU is the scarce resource and is NOT replenishable within the build. Every test run, rehearsal and cold-agent audit that touches a GPU lane spends it. Default everything to local or CPU."
   }
 }

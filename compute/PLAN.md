@@ -88,22 +88,41 @@ read off the dashboard before the CPU lane is priced. `rates.json` carries
 
 ---
 
-## 2. Budget
+## 2. Budget — GPU is the binding constraint
 
-| | Modal | Daytona |
-| --- | --- | --- |
-| Credit | **$30** | **$200** |
-| Lane | GPU | CPU |
-| At measured rate | ~$0.000257/s (T4) | unverified |
-| Runway | **~32 hours of T4** | large; not the constraint |
+Lane split is fixed: **Daytona = CPU only** (no GPU on this plan), **Modal = GPU only**.
 
-GPU time is the scarce resource. Every demo recording, test run and cold-agent audit
-that touches the GPU lane spends real budget, so:
+| Lane | Provider | All-in cost | Credit price | Runway on credit |
+| --- | --- | --- | --- | --- |
+| `cpu-small` 1 vCPU / 1 GiB | Daytona | $0.0000185/s | 30,000 tinybar | **3,003 h** |
+| `cpu-4` 4 vCPU / 8 GiB | Daytona | $0.000092/s | 147,000 tinybar | 604 h |
+| `gpu-t4` 2 vCPU / 8 GiB | Modal | $0.000257/s | 411,000 tinybar | **32.5 h** |
+| `gpu-a100-40` 4 vCPU / 16 GiB | Modal | $0.000769/s | 1,229,000 tinybar | **10.8 h** |
 
-- default the flagship to **CPU-heavy, GPU-brief**
-- keep a `local` adapter so tests and rehearsals cost nothing
-- hard wall-clock cap per session, enforced server-side
-- reap orphans via `Sandbox.list()` tags on every boot
+CPU is effectively free at this scale — 3,000 hours. **GPU is not, and it does not
+replenish inside the build window.** 10.8 hours of A100 is roughly one careless
+afternoon.
+
+Rules that follow directly:
+
+- **`local` adapter is mandatory before either provider.** Every unit test, integration
+  run and demo rehearsal uses it. Zero cost, zero cold start, works offline.
+- **CPU is the development lane.** The tick loop, credit burn, checkpointing, refund
+  arithmetic and reconciliation are all provider-agnostic — build and debug them on
+  Daytona, where 3,000 hours means mistakes are free.
+- **GPU is a demo resource, not a development one.** Touch it only to prove the lane
+  works and to record.
+- **A100 is opt-in and gated.** T4 is the default GPU lane; A100 requires an explicit
+  flag so it can never be selected by accident.
+- **Hard server-side wall-clock cap per session**, lower on GPU lanes than CPU.
+- **Track GPU seconds spent** against the 32.5 h ceiling and refuse new GPU sessions
+  past a reserve, so there is always enough left to record the demo.
+- **Reap orphans on boot** via `Sandbox.list()` tags — an abandoned GPU sandbox with
+  `idle_timeout` unset burns budget silently.
+
+The flagship is designed around this: **CPU-heavy, GPU-brief.** Parsing 5,000 PDFs is
+minutes of CPU; embedding the chunks is seconds of T4. That is also the honest shape of
+the workload, so the constraint and the demo agree.
 
 ---
 
