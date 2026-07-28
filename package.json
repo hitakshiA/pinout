@@ -6,6 +6,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@hashgraph/hedera-agent-kit": "^4.0.0",
     "@hiero-ledger/sdk": "^2.86.2",
     "@hono/node-server": "^2.0.12",
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -13,7 +14,8 @@
     "@x402/core": "^2.20.0",
     "@x402/hedera": "^2.20.0",
     "@x402/hono": "^2.20.0",
-    "hono": "^4.12.32"
+    "hono": "^4.12.32",
+    "zod": "^4.4.3"
   },
   "scripts": {
     "e2e": "node scripts/e2e.mjs",
@@ -40,5 +42,12 @@
     "streaming",
     "ai-agents",
     "mcp"
-  ]
+  ],
+  "exports": {
+    ".": "./src/server.mjs",
+    "./client": "./src/client.mjs",
+    "./agent-kit": "./src/agent-kit-plugin.mjs",
+    "./mcp": "./src/mcp.mjs",
+    "./verifier": "./src/verifier.mjs"
+  }
 }

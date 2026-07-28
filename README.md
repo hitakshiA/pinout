@@ -193,14 +193,46 @@ price, turning abandonment into a drain.
 
 ## For AI agents
 
-An MCP server exposes the lifecycle as tools. No tool returns data before its payment
-settles on-chain.
+Two agent interfaces, both gated on confirmed on-chain payment. No tool returns data
+before its payment settles.
+
+### MCP server
 
 ```bash
 npm run mcp
 ```
 
 `open_session` · `stream` · `close_session` · `verify_session` · `spend_report`
+
+### Hedera Agent Kit v4 plugin
+
+```js
+import { ToolDiscovery } from "@hashgraph/hedera-agent-kit";
+import { pinoutPlugin } from "pinout/agent-kit";
+
+const tools = new ToolDiscovery([pinoutPlugin]).getAllTools(context);
+```
+
+Tools extend `BaseTool`, so they participate in v4's **hooks and policies** — spend
+limits, HCS audit hooks and human-in-the-loop confirmation apply automatically, which
+is exactly what you want on a payments plugin.
+
+> [!TIP]
+> In Agent Kit, a tool's `method` is its **unique registry key**, not an HTTP verb.
+> Setting it to `"post"`/`"get"` collides with core tools and the kit silently drops
+> yours with `Plugin tool "post" conflicts with core tool`.
+
+### Discovery
+
+Agents can find these resources without being told the URLs:
+
+```bash
+curl localhost:4021/bazaar             # x402 bazaar catalog
+curl localhost:4021/.well-known/x402
+```
+
+The catalog is derived from the same route config that drives the payment gate, so the
+advertised price can never drift from what is actually charged.
 
 Spend guards (`maxPerCallTinybar`, `budgetTinybar`) reject a challenge **before any
 signature exists**, so a mispriced or injected 402 can never put funds at risk.
@@ -310,7 +342,6 @@ Working end to end on Hedera testnet. Known limits, stated plainly:
 
 - Sessions are single-node and held in memory, persisted to an append-only log.
   A crash loses at most `CHECKPOINT_EVERY` events, and **the loss falls on the seller**.
-- The `bazaar` extension is emitted but nothing indexes it yet.
 - Facilitator equivalence rests on one trial each, not a load test.
 - Testnet only.
 

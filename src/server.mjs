@@ -200,6 +200,39 @@ function authorised(c) {
 const app = new Hono();
 
 /**
+ * Build a bazaar catalog from the live route config. Deriving it from `routes`
+ * rather than hand-writing it means the advertised price and shape can never
+ * drift from what the payment gate actually enforces.
+ */
+function bazaarCatalog() {
+  const base = env.PUBLIC_URL ?? `http://localhost:${env.PORT ?? 4021}`;
+  const items = [];
+  for (const [pattern, cfg] of Object.entries(routes)) {
+    const [method, path] = pattern.split(" ");
+    for (const a of cfg.accepts) {
+      const price = typeof a.price === "function" ? a.price({}) : a.price;
+      items.push({
+        resource: {
+          url: `${base}${path}`,
+          description: cfg.description,
+          mimeType: cfg.mimeType ?? "application/json",
+          serviceName: cfg.serviceName ?? "Pinout",
+          tags: cfg.tags ?? [],
+        },
+        accepts: [{
+          scheme: a.scheme, network: a.network, payTo: a.payTo,
+          amount: price.amount, asset: price.asset,
+          maxTimeoutSeconds: a.maxTimeoutSeconds,
+          extra: { feePayer: FEE_PAYER },
+        }],
+        extensions: { bazaar: cfg.extensions?.bazaar },
+      });
+    }
+  }
+  return { x402Version: 2, items, updatedAt: new Date().toISOString() };
+}
+
+/**
  * Route config for the official @x402/hono middleware. Prices are dynamic
  * callbacks — the pattern the Hedera reference repos bless — so a top-up can
  * later be priced from the session's observed burn rate.
@@ -311,6 +344,11 @@ app.use("/session/:id/*", async (c, next) => {
 
 app.use("*", paymentMiddleware(routes, resourceServer));
 
+// Discovery: the bazaar extension declares the shape, this endpoint makes it
+// enumerable so an agent can find these resources without being told the URLs.
+app.get("/bazaar", (c) => c.json(bazaarCatalog()));
+app.get("/.well-known/x402", (c) => c.json(bazaarCatalog()));
+
 app.get("/", (c) => c.json({
   service: "Pinout",
   description: "Prepaid metered streaming credits over x402 on Hedera",
@@ -328,6 +366,8 @@ app.get("/", (c) => c.json({
     burnTopicUrl: hashscan.topic(env.BURN_TOPIC_ID),
     settlementTopicUrl: hashscan.topic(env.TOPIC_ID),
   },
+  discovery: { bazaar: "/bazaar", wellKnown: "/.well-known/x402" },
+  agentInterfaces: { mcp: "npm run mcp", agentKitPlugin: "src/agent-kit-plugin.mjs" },
   facilitator: CONFIG.facilitator,
   feePayer: FEE_PAYER,
 }));
