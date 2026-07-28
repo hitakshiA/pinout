@@ -1,0 +1,46 @@
+{
+  "_note": "Credit price = 1 second of compute held. Margins assume the provider cost shown.",
+  "hbarUsd": 0.068801,
+  "_hbarUsdSource": "Hedera mirror node /api/v1/network/exchangerate at time of writing; resolve live at runtime",
+  "lanes": {
+    "cpu-small": {
+      "provider": "daytona",
+      "vcpu": 1,
+      "memMiB": 1024,
+      "diskGiB": 3,
+      "providerCostPerSecUsd": null,
+      "_costVerified": false,
+      "_costNote": "Daytona does not publish per-resource container rates. Confirm vCPU/h, RAM GiB/h, disk GiB/h in the dashboard before pricing.",
+      "creditTinybar": null
+    },
+    "gpu-t4": {
+      "provider": "modal",
+      "gpu": "T4",
+      "vcpu": 2,
+      "memMiB": 8192,
+      "providerCostPerSecUsd": 0.000257,
+      "_costVerified": true,
+      "_costBreakdown": {
+        "gpuT4": 0.000164,
+        "cpu_1_physical_core": 3.942e-05,
+        "mem_8GiB": 5.336e-05,
+        "_note": "Modal SANDBOX cpu/mem rates, which are ~3x standard task rates"
+      },
+      "creditTinybar": 410000
+    },
+    "gpu-a100-40": {
+      "provider": "modal",
+      "gpu": "A100-40GB",
+      "vcpu": 4,
+      "memMiB": 16384,
+      "providerCostPerSecUsd": 0.000796,
+      "_costVerified": true,
+      "_costBreakdown": {
+        "gpuA100_40": 0.000583,
+        "cpu_2_cores": 7.884e-05,
+        "mem_16GiB": 0.00010672
+      },
+      "creditTinybar": 1270000
+    }
+  }
+}
