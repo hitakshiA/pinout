@@ -183,6 +183,15 @@ export async function settleSession(ctx, s, cause = CAUSE.CLIENT_DISCONNECT) {
   return s._closing;
 }
 
+/**
+ * Sessions closed but not yet anchored. An anchor costs ~0.7345 HBAR while a
+ * short session earns a fraction of that, so anchoring every close individually
+ * loses money on every sale (measured: seller -0.74 HBAR to earn 0.0015). They
+ * are batched — one anchor covers many sessions — which is the batched
+ * settlement answer to open question #1 of x402 issue #2273.
+ */
+export const pendingAnchor = [];
+
 async function doSettle(ctx, s, cause) {
   s.state = "SETTLING";
 
@@ -210,6 +219,17 @@ async function doSettle(ctx, s, cause) {
   // So: try to anchor. If it fails, refund anyway and record the session as
   // UNANCHORED so the failure is visible rather than silent.
   let settlement = null, anchorError = null;
+
+  // Default: refund now, anchor in the next batch. `priority` buys an immediate
+  // dedicated anchor, which is what that ~0.7345 HBAR actually costs.
+  if (s.settlementTier !== "priority") {
+    pendingAnchor.push({
+      id: s.id, payer: s.payer, fundingTxIds: s.fundingTxIds,
+      pricePerEvent: s.pricePerEvent, burned: s.burned, paidTinybar: s.paidTinybar,
+      burnFinalSeq: head.sequenceNumber, burnFinalRunningHash: head.runningHash,
+      cause, queuedAt: Date.now(),
+    });
+  } else {
   try {
     settlement = await writeSettlement(ctx, {
       sessionId: s.id,
@@ -225,6 +245,7 @@ async function doSettle(ctx, s, cause) {
   } catch (e) {
     anchorError = e.message;
     console.error(`ANCHOR FAILED for ${s.id}: ${e.message} — refunding anyway`);
+  }
   }
   s.settlement = settlement;
   s.anchorError = anchorError;
@@ -254,6 +275,8 @@ async function doSettle(ctx, s, cause) {
   s.settlementResult = {
     settlement, refund, owed, unused, anchorError,
     anchored: Boolean(settlement),
+    settlementTier: s.settlementTier ?? "batched",
+    anchorPending: s.settlementTier !== "priority",
     terminate: {
       type: "SessionTerminate",
       session: s.id,
@@ -313,4 +336,31 @@ export async function settleExpired(ctx, sessions, cause = CAUSE.MAX_DURATION) {
       terminate: { type: "SessionTerminate", session: s.id, cause } };
   }
   return { anchor, sessions: due.length, refunds };
+}
+
+
+/**
+ * Write ONE anchor covering every session closed since the last sweep.
+ * Amortises the ~0.7345 HBAR cost across all of them.
+ */
+export async function flushPendingAnchors(ctx) {
+  if (!pendingAnchor.length) return null;
+  const batch = pendingAnchor.splice(0, pendingAnchor.length);
+  const head = batch[batch.length - 1];
+  try {
+    const anchor = await writeBatchSettlement(ctx, {
+      sessions: batch.map((b) => ({
+        id: b.id, payer: b.payer, fundingTxIds: b.fundingTxIds,
+        pricePerEvent: b.pricePerEvent, burned: b.burned, paidTinybar: b.paidTinybar,
+      })),
+      burnFinalSeq: head.burnFinalSeq,
+      burnFinalRunningHash: head.burnFinalRunningHash,
+      cause: "batched-settlement",
+    });
+    return { anchor, count: batch.length, sessions: batch.map((b) => b.id) };
+  } catch (e) {
+    // Put them back so the next sweep retries rather than losing the record.
+    pendingAnchor.unshift(...batch);
+    throw e;
+  }
 }

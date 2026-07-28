@@ -289,3 +289,39 @@ caught the stranded-money bug, and the surface only grows from here.
 > **Pinout Compute gives an agent a computer it rents by the second, pays for with a
 > wallet instead of an account, and gets the change back from — with a bill anyone can
 > recompute from a public log.**
+
+
+---
+
+## 10. Measured unit economics — the service is not profitable at demo scale
+
+This is the number that matters and it is not flattering.
+
+| | |
+| --- | --- |
+| Settlement anchor | **0.7345 HBAR** (measured, irrecoverable) |
+| cpu-small revenue | 30,000 tinybar/s = **0.0003 HBAR/s** |
+| Break-even session length | **~2,450 seconds (41 minutes)** per anchor |
+
+A typical demo session runs 5–10 seconds and earns ~0.0018 HBAR against a
+0.7345 HBAR anchor — the seller loses roughly **400x what it earns**.
+
+Batched settlement (implemented) divides the anchor across every session closed
+in a sweep window, so the cost per session is `0.7345 / N`. With N=2 in testing
+the seller still lost 3.47 HBAR across 3 short sessions. Batching makes the
+economics *survivable at volume*, not *profitable at demo scale*.
+
+Honest options, none of which are hidden:
+
+1. **Volume.** At N=100 sessions per anchor the cost is 0.0073 HBAR each, which
+   short sessions can carry.
+2. **Longer sessions.** Real compute jobs run minutes, not seconds.
+3. **Priority tier.** `?settlement=priority` makes the buyer pay for their own
+   immediate anchor — the 0.7345 HBAR is then a disclosed line item rather than
+   a loss.
+4. **Anchor less often.** One anchor per hour rather than per sweep, trading
+   settlement latency for cost.
+
+The seller-solvency guard exists precisely because of this: it refuses new
+sessions rather than accept money it cannot afford to settle. During testing it
+correctly shut the service down when the operator wallet hit 0.55 HBAR.

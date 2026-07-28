@@ -28,7 +28,7 @@ import {
   env, NETWORK, HBAR_ASSET, FACILITATORS, resolveFeePayer, requireConfig, hashscan,
 } from "./config.mjs";
 import {
-  Session, CAUSE, flushCheckpoint, settleSession, settleExpired, makeClient,
+  Session, CAUSE, flushCheckpoint, settleSession, settleExpired, flushPendingAnchors, pendingAnchor, makeClient,
 } from "./session.mjs";
 import { getProvider } from "../providers/index.mjs";
 import { RATES } from "../providers/compute.mjs";
@@ -359,6 +359,18 @@ const routes = {
     mimeType: "application/json", extensions: BAZAAR_EXT,
   },
   ...Object.fromEntries(Object.keys(LANES).map((l) => [`POST /compute/${l}`, laneRoute(l)])),
+  // Top-up must ALSO be priced per lane. A flat-priced top-up that credits at
+  // lane value is the same theft as the mint route had: pay 200,000, be
+  // credited up to 24,660,000, refund the difference.
+  ...Object.fromEntries(Object.keys(LANES).map((l) => [`POST /topup/${l}/:id`, {
+    accepts: [{
+      scheme: "exact", network: NETWORK, payTo: env.SELLER_ACCOUNT_ID,
+      price: { amount: String(lanePricing(l).topUpTinybar), asset: HBAR_ASSET },
+      maxTimeoutSeconds: 180,
+    }],
+    description: `Top up a ${l} session (${lanePricing(l).topUpTinybar} tinybar)`,
+    serviceName: "Pinout Compute", mimeType: "application/json", extensions: BAZAAR_EXT,
+  }])),
   "POST /session/:id/topup": {
     accepts: [{
       scheme: "exact", network: NETWORK, payTo: env.SELLER_ACCOUNT_ID,
@@ -382,6 +394,14 @@ const routes = {
 app.use("/session/:id/*", async (c, next) => {
   const a = authorised(c);
   if (a.err) return a.err;
+  // A compute session must top up on its own priced lane route. Refused
+  // here, BEFORE the flat-priced 402 is issued, so no money is taken.
+  if (c.req.path.endsWith("/topup") && a.s.unit === "second") {
+    return c.json({
+      error: "this session tops up on its lane route",
+      use: `POST /topup/${a.s.lane}/${a.s.id}`,
+    }, 400);
+  }
   await next();
 });
 
@@ -434,6 +454,7 @@ app.get("/health", async (c) => {
     activeGpuSessions: active.filter((x) => RATES.lanes[x.lane]?.gpu).length,
     limits: LIMITS,
     providerSpend: spendReport(),
+    pendingAnchors: pendingAnchor.length,
     sellerSolvency: await sellerSolvency([...sessions.values()].filter((x) => x.state !== "CLOSED").length),
     feePayer: FEE_PAYER,
     facilitator: CONFIG.facilitator,
@@ -584,6 +605,30 @@ app.post("/session", async (c) => {
   });
 });
 
+app.post("/topup/:lane/:id", async (c) => {
+  const lane = c.req.param("lane");
+  if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}` }, 404);
+  const s = sessions.get(c.req.param("id"));
+  if (!s) return c.json({ error: "no such session" }, 404);
+  const auth = c.req.header("Authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.query("token");
+  if (!s.authorise(token)) return c.json({ error: "unauthorized" }, 401);
+  if (s.lane !== lane) {
+    return c.json({ error: `session is lane ${s.lane}, not ${lane}` }, 400);
+  }
+  if (s.state === "CLOSED" || s.state === "SETTLING") {
+    return c.json({ error: `session is ${s.state}; cannot top up` }, 409);
+  }
+  const pay = paymentContext(c);
+  if (!pay) return c.json({ error: "no verified payment" }, 402);
+
+  const pricing = lanePricing(lane);
+  const res = s.credit(pay.key, pricing.topUpTinybar);
+  s.touch(); saveSession(s);
+  return c.json({ sessionId: s.id, lane, credited: res.credited,
+                  duplicate: res.duplicate, credits: s.credits });
+});
+
 app.post("/session/:id/topup", async (c) => {
   const a = authorised(c); if (a.err) return a.err;
   const s = a.s;
@@ -595,7 +640,13 @@ app.post("/session/:id/topup", async (c) => {
   const pay = paymentContext(c);
   if (!pay) return c.json({ error: "no verified payment" }, 402);
 
-  const res = s.credit(pay.key, lanePricing(s.lane).topUpTinybar);
+  // Invariant: this route is flat-priced, so it may only credit the flat amount.
+  const topUp = lanePricing(s.lane).topUpTinybar;
+  if (topUp !== CONFIG.topUpTinybar) {
+    console.error(`PRICING MISMATCH on /topup: credit ${topUp} vs charged ${CONFIG.topUpTinybar}`);
+    return c.json({ error: "internal pricing mismatch" }, 500);
+  }
+  const res = s.credit(pay.key, topUp);
   saveSession(s);
   return c.json({
     sessionId: s.id,
@@ -703,6 +754,8 @@ app.get("/session/:id/stream", (c) => {
 app.post("/session/:id/close", async (c) => {
   const a = authorised(c); if (a.err) return a.err;
   const s = a.s;
+  // ?settlement=priority buys an immediate dedicated anchor; default is batched.
+  s.settlementTier = c.req.query("settlement") === "priority" ? "priority" : "batched";
   const out = await settleSession(ctx, s, c.req.query("cause") ?? CAUSE.CLIENT_DISCONNECT);
   // Signed receipt: binds the settled payment to the consumption actually
   // recorded on the burn ledger and to the settlement anchor.
@@ -723,6 +776,8 @@ app.post("/session/:id/close", async (c) => {
     sessionId: s.id,
     ...out.terminate,
     anchored: out.anchored,
+    anchorPending: out.anchorPending ?? false,
+    settlementTier: out.settlementTier,
     anchorError: out.anchorError ?? undefined,
     settlementTx: out.settlement?.txId ?? null,
     settlementTxUrl: out.settlement ? hashscan.tx(out.settlement.txId) : null,
@@ -780,6 +835,15 @@ export async function start(port = Number(env.PORT ?? 4021)) {
   // Reap abandoned sessions. Without this a buyer that pays and walks away
   // loses its money permanently — the service keeps funds for undelivered
   // service. Batched so cleanup cannot be turned into a drain on the seller.
+  // Flush queued anchors on an interval so one write covers many sessions.
+  const anchorSweep = setInterval(async () => {
+    try {
+      const out = await flushPendingAnchors(ctx);
+      if (out) console.log(`anchor batch    : ${out.count} session(s) in ONE anchor ${out.anchor.txId}`);
+    } catch (e) { console.error("anchor batch failed (will retry):", e.message); }
+  }, Number(env.ANCHOR_SWEEP_MS ?? 120_000));
+  anchorSweep.unref?.();
+
   const sweep = setInterval(async () => {
     try {
       const out = await settleExpired(ctx, sessions.values(), CAUSE.MAX_DURATION);

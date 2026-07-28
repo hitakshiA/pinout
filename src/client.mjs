@@ -28,6 +28,7 @@ export class PinoutClient {
     this.spent = 0;
     this.secrets = new Map();    // sessionId -> bearer secret, issued once at mint
     this.thresholds = new Map(); // sessionId -> remaining units at which to top up
+    this.lanes = new Map();      // sessionId -> compute lane, so top-ups price correctly
     const key = PrivateKey.fromStringECDSA(
       (privateKey ?? env.HEDERA_PRIVATE_KEY).replace(/^0x/, "")
     );
@@ -113,12 +114,13 @@ export class PinoutClient {
     const out = this.#withSettlement(await this.pay(`/compute/${lane}`));
     if (out.sessionSecret) this.secrets.set(out.sessionId, out.sessionSecret);
     if (out.topUpAtSecondsRemaining) this.thresholds.set(out.sessionId, out.topUpAtSecondsRemaining);
+    if (out.lane) this.lanes.set(out.sessionId, out.lane);
     return out;
   }
-  async topUp(sessionId) {
-    return this.#withSettlement(
-      await this.pay(`/session/${sessionId}/topup`, { headers: this.#auth(sessionId) })
-    );
+  async topUp(sessionId, lane) {
+    const l = lane ?? this.lanes.get(sessionId);
+    const path = l ? `/topup/${l}/${sessionId}` : `/session/${sessionId}/topup`;
+    return this.#withSettlement(await this.pay(path, { headers: this.#auth(sessionId) }));
   }
   /**
    * Close writes an on-chain settlement anchor and then a refund, so it is
