@@ -1,0 +1,44 @@
+{
+  "name": "pinout",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hiero-ledger/sdk": "^2.86.2",
+    "@hono/node-server": "^2.0.12",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@noble/curves": "^2.2.0",
+    "@x402/core": "^2.20.0",
+    "@x402/hedera": "^2.20.0",
+    "@x402/hono": "^2.20.0",
+    "hono": "^4.12.32"
+  },
+  "scripts": {
+    "e2e": "node scripts/e2e.mjs",
+    "verify": "node scripts/verify.mjs",
+    "bench": "node scripts/bench-hcs.mjs",
+    "server": "node -e \"import('./src/server.mjs').then(m=>m.start())\"",
+    "check-config": "node -e \"import('./src/config.mjs').then(m=>{m.requireConfig();console.log('config OK')})\"",
+    "mcp": "node src/mcp.mjs"
+  },
+  "version": "0.1.0",
+  "description": "Prepaid metered streaming credits over x402 on Hedera",
+  "license": "MIT",
+  "author": "Hitakshi Arora (@hitakshiA)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hitakshiA/pinout.git"
+  },
+  "keywords": [
+    "x402",
+    "hedera",
+    "hcs",
+    "hip-991",
+    "micropayments",
+    "streaming",
+    "ai-agents",
+    "mcp"
+  ]
+}
