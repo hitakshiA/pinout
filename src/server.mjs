@@ -544,6 +544,25 @@ app.post("/session/:id/topup", async (c) => {
   });
 });
 
+/**
+ * Stage code out-of-band. A large base64 payload in a query string exceeds the
+ * request-line limit and the connection is reset before any guard can run —
+ * so oversized submissions must have a body-shaped path with a real 413.
+ */
+app.post("/session/:id/code", async (c) => {
+  const a = authorised(c); if (a.err) return a.err;
+  const body = await c.req.json().catch(() => null);
+  const code = body?.code;
+  if (typeof code !== "string") return c.json({ error: "expected {code: string}" }, 400);
+  const bytes = Buffer.byteLength(code, "utf8");
+  if (bytes > LIMITS.maxCodeBytes) {
+    return c.json({ error: "code too large", bytes, maxBytes: LIMITS.maxCodeBytes }, 413);
+  }
+  a.s.stagedCode = code;
+  return c.json({ staged: true, bytes,
+    next: `GET /session/${a.s.id}/stream?provider=compute&n=<maxSeconds>` });
+});
+
 app.get("/session/:id/stream", (c) => {
   const a = authorised(c); if (a.err) return a.err;
   const s = a.s;
@@ -566,7 +585,17 @@ app.get("/session/:id/stream", (c) => {
 
   return streamSSE(c, async (stream) => {
     let sent = 0;
-    const jobCode = c.req.query("code") ? Buffer.from(c.req.query("code"), "base64").toString("utf8") : undefined;
+    // Prefer code staged via POST; fall back to the inline query param.
+    const inline = c.req.query("code");
+    if (inline && inline.length > LIMITS.maxCodeBytes) {
+      await stream.writeSSE({ event: "error", data: JSON.stringify({
+        error: "code too large", maxBytes: LIMITS.maxCodeBytes,
+        hint: `POST /session/${s.id}/code with {"code": "..."} then stream without the code param`,
+      }) });
+      return;
+    }
+    const jobCode = s.stagedCode
+      ?? (inline ? Buffer.from(inline, "base64").toString("utf8") : undefined);
     for await (const ev of provider.stream({
       n, prompt: c.req.query("prompt"),
       // Lane comes from the SESSION, never the request — otherwise a caller

@@ -136,7 +136,18 @@ export class PinoutClient {
     if (provider) q.set("provider", provider);
     if (prompt) q.set("prompt", prompt);
     // Arbitrary source is base64'd so quoting and newlines survive the URL.
-    if (code) q.set("code", Buffer.from(code, "utf8").toString("base64"));
+    // Large payloads must be staged in a body; a long query string is reset by
+    // the server before it can be rejected politely.
+    if (code && Buffer.byteLength(code, "utf8") > 8000) {
+      const r = await fetch(`${this.base}/session/${sessionId}/code`, {
+        method: "POST",
+        headers: { ...this.#auth(sessionId), "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      if (!r.ok) throw new Error(`stage code failed ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    } else if (code) {
+      q.set("code", Buffer.from(code, "utf8").toString("base64"));
+    }
     const res = await fetch(`${this.base}/session/${sessionId}/stream?${q}`,
       { headers: this.#auth(sessionId) });
     if (!res.ok) throw new Error(`stream ${res.status}`);
