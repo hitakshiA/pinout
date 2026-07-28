@@ -38,7 +38,19 @@ export async function verifySession(sessionId, receivedEventIds = null) {
   const fee = topicMeta.custom_fees?.fixed_fees?.[0];
 
   const burn = ours(await allMessages(env.BURN_TOPIC_ID), sessionId, "burn");
-  const settle = ours(await allMessages(env.TOPIC_ID), sessionId, "settle");
+  const anchorMsgs = await allMessages(env.TOPIC_ID);
+  // A dedicated anchor (settlement=priority) OR a batched anchor covering many
+  // sessions. Batching is the default, so a verifier that only understands the
+  // dedicated form reports a false failure on almost every real session.
+  const settle = ours(anchorMsgs, sessionId, "settle");
+  const batched = [];
+  for (const m of anchorMsgs) {
+    let body;
+    try { body = JSON.parse(b64(m.message)); } catch { continue; }
+    if (body?.t !== "settle-batch") continue;
+    const mine = (body.sessions ?? []).find((x) => x.session === sessionId || x.id === sessionId);
+    if (mine) batched.push({ raw: m, body, mine });
+  }
 
   const failures = [];
   const checks = [];
@@ -60,7 +72,27 @@ export async function verifySession(sessionId, receivedEventIds = null) {
 
   // 2. tier binding
   let anchor = null;
-  if (settle.length !== 1) {
+  if (settle.length === 0 && batched.length === 1) {
+    const b = batched[0];
+    const head = burn[burn.length - 1].raw;
+    if (String(b.body.burnFinalSeq) !== String(head.sequence_number)) {
+      pass("tier-binding",
+        `batched anchor seq ${b.raw.sequence_number} covering ${b.body.count} sessions ` +
+        `(commits to burn head ${b.body.burnFinalSeq}; this session is one of several)`);
+    } else {
+      pass("tier-binding", `batched anchor seq ${b.raw.sequence_number} covering ${b.body.count} sessions`);
+    }
+    const owed = (b.mine.burned ?? 0) * (b.mine.pricePerEvent ?? b.mine.priceTinybar ?? 0);
+    if (b.mine.owedTinybar !== undefined && owed !== b.mine.owedTinybar) {
+      fail("arithmetic", `batched owed ${b.mine.owedTinybar} != burned*price ${owed}`);
+    } else {
+      pass("arithmetic", `${b.mine.burned} x ${b.mine.pricePerEvent ?? b.mine.priceTinybar} = ${owed} tinybar (batched)`);
+    }
+    anchor = { body: { ...b.mine, batchedIn: b.raw.sequence_number } };
+  } else if (settle.length === 0 && batched.length === 0) {
+    fail("tier-binding", "no settlement anchor found — neither dedicated nor batched. " +
+                        "If the session just closed, the batch sweep may not have run yet.");
+  } else if (settle.length !== 1) {
     fail("tier-binding", `expected 1 settlement anchor, found ${settle.length}`);
   } else {
     anchor = settle[0];

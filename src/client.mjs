@@ -127,9 +127,13 @@ export class PinoutClient {
    * legitimately slower than a normal request. The default fetch timeout is
    * too short for it.
    */
-  async close(sessionId, cause, { timeoutMs = 120000 } = {}) {
+  async close(sessionId, cause, { timeoutMs = 120000, settlement } = {}) {
+    const q = new URLSearchParams();
+    if (cause) q.set("cause", cause);
+    // 'priority' buys an immediate dedicated anchor; default is batched.
+    if (settlement) q.set("settlement", settlement);
     const r = await fetch(
-      `${this.base}/session/${sessionId}/close${cause ? `?cause=${cause}` : ""}`,
+      `${this.base}/session/${sessionId}/close${q.toString() ? `?${q}` : ""}`,
       { method: "POST", headers: this.#auth(sessionId), signal: AbortSignal.timeout(timeoutMs) }
     );
     return r.json();
