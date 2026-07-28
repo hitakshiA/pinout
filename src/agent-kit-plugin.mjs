@@ -145,9 +145,10 @@ class CloseSessionTool extends PinoutBaseTool {
   method = "pinout_close_session";
   name = "pinout_close_session";
   description =
-    "Close a Pinout session. The seller writes a HIP-991 settlement anchor " +
-    "(paying the buyer via the topic's custom fee) and only then refunds unused " +
-    "credits. Returns both transaction ids and a signed receipt.";
+    "Close a Pinout session. Unused credits are refunded on-chain immediately and a " +
+    "HIP-991 settlement anchor is recorded (batched by default). The anchor costs the " +
+    "seller ~0.7345 HBAR in network fees; its custom fee goes to a fixed collector, " +
+    "NOT to the paying buyer. Returns transaction ids and a signed receipt.";
   parameters = z.object({
     sessionId: z.string(),
     cause: z.string().optional(),

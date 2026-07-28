@@ -65,3 +65,32 @@ that is the operator's own treasury, so for a third-party buyer it is a
 self-payment and carries no auditor semantics. Set `ANCHOR_FEE_COLLECTOR` to an
 escrow or counterparty account if you want the fee to actually change hands. The
 network fee is the part that bites regardless of who collects.
+
+
+## Known economic asymmetry: the seller subsidises abandoned sessions
+
+Independent audit named this as the weakest remaining point, and it is real.
+
+A buyer risks nothing. Open a session, burn zero seconds, close: the full
+prepayment is refunded, while the **seller** pays the refund transaction gas
+(~146,000 tinybar) plus a share of the ~0.7345 HBAR settlement anchor. Testnet
+HBAR is free, so an attacker's cost is zero and the seller's is real.
+
+What limits it today:
+
+- **Batched settlement** — one anchor covers every session closed in a sweep
+  window, so the per-session anchor share falls as volume rises.
+- **Solvency admission** — new sessions are refused with 503 when the operator
+  cannot afford an anchor per open session. It protects buyers from stranded
+  balances; it does not stop the drain.
+- **Concurrency caps** — 8 sessions, 1 GPU.
+
+What would actually remove it, none of which is implemented:
+
+1. A small **non-refundable booking fee** covering amortised anchor + gas.
+2. **Mainnet settlement**, where the attacker's HBAR is not free.
+3. **Payer allowlisting** for a public testnet deployment.
+
+This is disclosed rather than hidden because it is the difference between "a
+buyer cannot steal from us" (true, and verified across four audits) and "we
+cannot lose money" (false).

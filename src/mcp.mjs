@@ -56,9 +56,10 @@ const TOOLS = [
   {
     name: "close_session",
     description:
-      "Close a session. Writes the HIP-991 settlement anchor (the seller pays the " +
-      "buyer via the topic's custom fee) and only then issues the refund of unused " +
-      "credits. Returns both transaction ids.",
+      "Close a session. Unused credits are refunded on-chain immediately and a " +
+      "HIP-991 settlement anchor is recorded (batched by default). Writing an anchor " +
+      "costs the seller ~0.7345 HBAR in network fees; its custom fee goes to a fixed " +
+      "collector, NOT to the paying buyer. Returns the transaction ids.",
     inputSchema: {
       type: "object",
       properties: { sessionId: { type: "string" }, cause: { type: "string" } },
