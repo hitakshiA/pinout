@@ -5,6 +5,8 @@ and gets change back from — with a bill anyone can recompute from public data.
 
 Two lanes: **CPU** (Daytona, $200 credit) and **GPU** (Modal, $30 credit).
 
+All provider rates below are confirmed. No estimated numbers remain.
+
 ---
 
 ## 1. Verified provider facts
@@ -81,10 +83,21 @@ clock starts**, or every refund drifts in the seller's favour.
 **Org resource pool (Tier 1):** 10 vCPU / 10 GiB RAM / 30 GiB disk — a ceiling on
 concurrent sandboxes, not a per-sandbox limit.
 
-**Pricing: UNVERIFIED.** Daytona does not publish per-resource container rates. The
-only public figure is `$0.0858/vCPU/h` for *Windows*. Linux container rates must be
-read off the dashboard before the CPU lane is priced. `rates.json` carries
-`_costVerified: false` for `cpu-small` so nothing ships on a guess.
+**Pricing — confirmed from the dashboard** (not published in the public docs):
+
+| Resource | Rate |
+| --- | --- |
+| vCPU | $0.00001400 / s |
+| Memory | $0.00000450 / GiB / s |
+| Storage | $0.00000003 / GiB / s — **first 5 GB free** |
+| Windows OS surcharge | $0.0000238 / vCPU / s |
+
+So `cpu-small` (1 vCPU, 1 GiB, 3 GiB disk) = `0.000014 + 0.0000045 + 0` =
+**$0.0000185/s**. Disk is free under the 5 GB allowance.
+
+Daytona also sells GPU (RTX 4090 $0.000275/s, RTX 5090 $0.000358/s, H100 $0.001097/s,
+H200 $0.001261/s) at better value than Modal, **but GPU is not available on this
+plan**, so the lane split stands: Daytona CPU, Modal GPU.
 
 ---
 
