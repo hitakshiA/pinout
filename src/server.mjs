@@ -32,7 +32,7 @@ import {
 } from "./session.mjs";
 import { getProvider } from "../providers/index.mjs";
 import { RATES } from "../providers/compute.mjs";
-import { admit, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS } from "../compute/guards.mjs";
+import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
 
@@ -391,7 +391,7 @@ app.use("/compute/:lane", async (c, next) => {
   const lane = c.req.param("lane");
   if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}`, lanes: Object.keys(LANES) }, 404);
   const active = [...sessions.values()].filter((s) => s.state !== "CLOSED");
-  const refusal = admit({
+  const refusal = await admitAsync({
     lane,
     activeSessions: active.length,
     activeGpu: active.filter((s) => RATES.lanes[s.lane]?.gpu).length,
@@ -408,7 +408,7 @@ app.get("/bazaar", (c) => c.json(bazaarCatalog()));
 
 // Machine-readable lane catalogue. An agent must be able to find the compute
 // capability from HTTP alone — a black-box consumer previously could not.
-app.get("/health", (c) => {
+app.get("/health", async (c) => {
   const active = [...sessions.values()].filter((x) => x.state !== "CLOSED");
   return c.json({
     ok: true,
@@ -417,6 +417,7 @@ app.get("/health", (c) => {
     activeGpuSessions: active.filter((x) => RATES.lanes[x.lane]?.gpu).length,
     limits: LIMITS,
     providerSpend: spendReport(),
+    sellerSolvency: await sellerSolvency([...sessions.values()].filter((x) => x.state !== "CLOSED").length),
     feePayer: FEE_PAYER,
     facilitator: CONFIG.facilitator,
   });
@@ -519,7 +520,12 @@ app.post("/session", async (c) => {
   });
   s.lane = pricing.lane;
   s.unit = pricing.unit;
-  if (c.req.query("cheat")) s.cheat = Number(c.req.query("cheat"));
+  // Fraud-simulation switch for the verifier demo. NEVER reachable publicly:
+  // it corrupts the ledger (money still follows s.burned, so it is
+  // self-sabotage rather than theft, but a public backdoor regardless).
+  if (c.req.query("cheat") && String(env.ALLOW_CHEAT ?? "false") === "true") {
+    s.cheat = Number(c.req.query("cheat"));
+  }
   const res = s.credit(pay.key, pricing.sessionTinybar);
   sessions.set(s.id, s);
   saveSession(s); // durable before the buyer is told it has credits
@@ -671,8 +677,8 @@ app.post("/session/:id/close", async (c) => {
     resourceUrl: new URL(c.req.url).toString(),
     sessionId: s.id, payer: s.payer, amount: s.paidTinybar,
     settlementTxId: s.fundingTxIds[0], unitsConsumed: s.burned, unit: "token",
-    burnTopic: env.BURN_TOPIC_ID, burnFinalSeq: out.settlement.body.burnFinalSeq,
-    settlementTopic: env.TOPIC_ID, settlementTxOnTopic: out.settlement.txId,
+    burnTopic: env.BURN_TOPIC_ID, burnFinalSeq: out.settlement?.body?.burnFinalSeq ?? null,
+    settlementTopic: env.TOPIC_ID, settlementTxOnTopic: out.settlement?.txId ?? null,
   });
   if (s.unit === "second") {
     try { recordSpend(lanePricing(s.lane).provider, s.burned, s.lane); } catch { /* non-fatal */ }
@@ -683,9 +689,11 @@ app.post("/session/:id/close", async (c) => {
     receiptSigner: { kid: keyId(), publicKey: sellerPublicKeyHex() },
     sessionId: s.id,
     ...out.terminate,
-    settlementTx: out.settlement.txId,
-    settlementTxUrl: hashscan.tx(out.settlement.txId),
-    settlementPaidToBuyerTinybar: out.settlement.paidToBuyer,
+    anchored: out.anchored,
+    anchorError: out.anchorError ?? undefined,
+    settlementTx: out.settlement?.txId ?? null,
+    settlementTxUrl: out.settlement ? hashscan.tx(out.settlement.txId) : null,
+    settlementFeeTinybar: out.settlement?.paidToBuyer,
     refundTxUrl: out.refund ? hashscan.tx(out.refund.txId) : null,
     burnCheckpoints: s.checkpoints.length,
   });

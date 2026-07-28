@@ -136,8 +136,14 @@ Live from `GET /api/v1/topics/0.0.9795865`:
 "fee_exempt_key_list": []
 ```
 
-- `collector_account_id` is the **buyer** — the inversion works. Every settlement
-  the seller writes pays the party it would otherwise defraud.
+- `collector_account_id` is a **fixed account chosen at topic creation**. On this
+  deployment it is the operator's own treasury, which happens to be the buyer in
+  our own tests — so the "seller pays the party it would defraud" framing held
+  only because buyer and collector were the same account. **For a third-party
+  buyer it is a self-payment.** An independent audit caught this; the claim has
+  been corrected everywhere. The real, unconditional incentive is the
+  **~0.7345 HBAR network fee** the seller cannot recover, whoever collects the
+  custom fee.
 - `denominating_token_id: null` confirms HBAR denomination.
 - `fee_exempt_key_list` empty — the seller is deliberately **not** exempt.
 - The fee schedule was successfully updated three times, proving the key is live

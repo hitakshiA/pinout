@@ -72,10 +72,46 @@ export function spendReport() {
 }
 
 /**
+ * The seller must be able to afford a settlement anchor for every session it
+ * accepts, or closing strands the buyer's balance. Anchors cost ~0.7345 HBAR
+ * each (measured), and testnet HBAR is free to an attacker — so open/close
+ * cycles are a >2x amplified drain on real seller funds.
+ */
+export const ANCHOR_COST_TINYBAR = Number(env.ANCHOR_COST_TINYBAR ?? 75_000_000);
+
+export async function sellerSolvency(activeSessions) {
+  const { mirror } = await import("../src/config.mjs");
+  try {
+    const a = await mirror(`/api/v1/accounts/${env.SELLER_ACCOUNT_ID}`);
+    const balance = Number(a.balance?.balance ?? 0);
+    // every open session may need an anchor, plus headroom for one more
+    const committed = (activeSessions + 1) * ANCHOR_COST_TINYBAR;
+    return { balance, committed, solvent: balance >= committed,
+             anchorsAffordable: Math.floor(balance / ANCHOR_COST_TINYBAR) };
+  } catch {
+    return { balance: null, solvent: true, anchorsAffordable: null }; // fail open on lookup error
+  }
+}
+
+/**
  * Decide whether a session may be opened. Returns null to allow, or
  * { status, error } to refuse — checked BEFORE the 402 is issued, so we never
  * take money for work we will not do.
  */
+export async function admitAsync(args) {
+  const sync = admit(args);
+  if (sync) return sync;
+  const sol = await sellerSolvency(args.activeSessions ?? 0);
+  if (!sol.solvent) {
+    return { status: 503,
+      error: "service cannot guarantee refunds right now",
+      detail: `seller can afford ${sol.anchorsAffordable} settlement anchors but ` +
+              `${(args.activeSessions ?? 0) + 1} sessions would be open. Refusing new ` +
+              `sessions rather than risk stranding a prepaid balance.` };
+  }
+  return null;
+}
+
 export function admit({ lane, activeSessions, activeGpu, codeBytes }) {
   const spec = RATES.lanes[lane];
   const isGpu = Boolean(spec?.gpu);

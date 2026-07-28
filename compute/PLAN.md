@@ -194,6 +194,13 @@ the quote is non-repudiable — a customer can prove what they were promised.
 
 `verify()` shows three numbers that must agree:
 
+> **Correction from an independent audit:** the HIP-991 custom fee is paid to a
+> collector fixed at topic creation, not to whoever is paying. On this deployment
+> that is the operator's treasury, so for a third-party buyer it is a
+> self-payment. The unconditional incentive is the ~0.7345 HBAR *network* fee the
+> seller cannot recover. Point the collector at an escrow account if you want the
+> fee itself to change hands.
+
 1. **What we billed** — credits burned, from the HCS ledger
 2. **What the chain says** — replayed from the public mirror node
 3. **What the provider says** — Daytona `get_metrics()` for the same window

@@ -199,19 +199,35 @@ async function doSettle(ctx, s, cause) {
   const owed = s.burned * s.pricePerEvent;
   const unused = Math.max(0, s.paidTinybar - owed);
 
-  // (2) the precondition. Throwing here means no refund goes out.
-  const settlement = await writeSettlement(ctx, {
-    sessionId: s.id,
-    payer: s.payer,
-    fundingTxIds: s.fundingTxIds,
-    pricePerEvent: s.pricePerEvent,
-    totalBurned: s.burned,
-    unusedTinybar: unused,
-    burnFinalSeq: head.sequenceNumber,
-    burnFinalRunningHash: head.runningHash,
-    cause,
-  });
+  // (2) The settlement anchor.
+  //
+  // The anchor gates the SELLER'S claim, not the buyer's money. Refusing to
+  // refund because the seller cannot afford to publish its own numbers is
+  // exactly backwards — it strands the buyer's balance to protect the seller's
+  // bookkeeping. An anchor costs ~0.73 HBAR; a seller that runs dry would
+  // otherwise trap every open session's prepaid balance.
+  //
+  // So: try to anchor. If it fails, refund anyway and record the session as
+  // UNANCHORED so the failure is visible rather than silent.
+  let settlement = null, anchorError = null;
+  try {
+    settlement = await writeSettlement(ctx, {
+      sessionId: s.id,
+      payer: s.payer,
+      fundingTxIds: s.fundingTxIds,
+      pricePerEvent: s.pricePerEvent,
+      totalBurned: s.burned,
+      unusedTinybar: unused,
+      burnFinalSeq: head.sequenceNumber,
+      burnFinalRunningHash: head.runningHash,
+      cause,
+    });
+  } catch (e) {
+    anchorError = e.message;
+    console.error(`ANCHOR FAILED for ${s.id}: ${e.message} — refunding anyway`);
+  }
   s.settlement = settlement;
+  s.anchorError = anchorError;
 
   // (3) refund, exactly once, only now
   let refund = null;
@@ -236,7 +252,8 @@ async function doSettle(ctx, s, cause) {
   s.credits = 0;
   s.state = "CLOSED";
   s.settlementResult = {
-    settlement, refund, owed, unused,
+    settlement, refund, owed, unused, anchorError,
+    anchored: Boolean(settlement),
     terminate: {
       type: "SessionTerminate",
       session: s.id,

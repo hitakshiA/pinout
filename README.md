@@ -286,7 +286,7 @@ refuses to say "passed".
 | Property | What it buys |
 |---|---|
 | **Fee-payer model** | The facilitator pays all network fees. The buyer needs **no fee headroom** — it can hold exactly the purchase amount and transact. |
-| **HIP-991 topic fees** | A log that charges to write, with the fee pointed at **the buyer**. The seller pays its own auditor. No EVM chain does this without deploying a contract. |
+| **HIP-991 topic fees** | A log that **costs money to write** — ~0.7345 HBAR per settlement anchor in irrecoverable network fees. Publishing your final numbers is expensive, so over-reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a fixed collector set at topic creation, so it is *not* a payment to the buyer unless you configure it that way. |
 | **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
 | **Free mirror node** | Public, unauthenticated, no signup — so verification costs the buyer nothing. |
 
