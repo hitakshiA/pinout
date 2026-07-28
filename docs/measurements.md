@@ -113,7 +113,7 @@ to be a meter.
 | Tier | Rail | Frequency | Cost | Purpose |
 | --- | --- | --- | --- | --- |
 | **Burn ledger** | plain HCS topic `0.0.9795896` | every N events | $0.0008 | fine-grained consumption checkpoints; `running_hash` + `sequence_number` tamper-evidence |
-| **Settlement anchor** | HIP-991 topic `0.0.9795865` | batched, rare | $0.050 | seller pays buyer; incentive alignment, amortized |
+| **Settlement anchor** | HIP-991 topic `0.0.9795865` | batched, rare | $0.050 | costs the seller ~0.7345 HBAR in irrecoverable network fees; the custom fee goes to a FIXED collector, not the paying buyer |
 
 Both tiers are HCS. **No smart contract anywhere** — the central architectural
 claim survives intact. HIP-991 still does real work at the layer where its cost
@@ -179,7 +179,7 @@ One live run, all steps on Hedera testnet:
 | burn checkpoints → plain HCS `0.0.9795896` | 11 checkpoints |
 | **mid-stream top-up**, socket never dropped | fired automatically at 399 credits remaining |
 | HIP-991 settlement anchor → `0.0.9795865` | `0.0.9795817@1785184013.047669956` |
-| seller pays buyer via the topic's custom fee | 100,000 tinybar, assessed on-chain |
+| anchor custom fee to the FIXED collector `0.0.9795418` (not the paying buyer) | 100,000 tinybar, assessed on-chain |
 | refund, issued **only after** the anchor landed | `0.0.9795817@1785184016.180196270`, 80,000 tinybar |
 
 Arithmetic checks out: 2,600 × 200 = 520,000 tinybar consumed against 600,000

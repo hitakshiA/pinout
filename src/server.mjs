@@ -22,7 +22,7 @@ import { paymentMiddleware } from "@x402/hono";
 // would spot immediately.
 import { ExactHederaScheme as ExactHederaServerScheme } from "@x402/hedera/exact/server";
 import { decodePaymentSignatureHeader } from "@x402/core/http";
-import { inspectHederaTransaction, extractTransactionFromPayload } from "@x402/hedera";
+import { inspectHederaTransaction, extractTransactionFromPayload, hederaAccountIdsEqual } from "@x402/hedera";
 import { createHash } from "node:crypto";
 import {
   env, NETWORK, HBAR_ASSET, FACILITATORS, resolveFeePayer, requireConfig, hashscan,
@@ -99,15 +99,45 @@ function paymentContext(c) {
   // not the whole PaymentPayload envelope.
   const txB64 = extractTransactionFromPayload(payload.payload);
   const inspected = inspectHederaTransaction(txB64);
+  const transfers = inspected.hbarTransfers ?? [];
+
   // payer = the account with the negative HBAR entry
-  const payer = (inspected.hbarTransfers ?? [])
-    .filter((t) => BigInt(t.amount) < 0n)
-    .map((t) => t.accountId)[0] ?? null;
+  const payer = transfers.filter((t) => BigInt(t.amount) < 0n).map((t) => t.accountId)[0] ?? null;
+
+  // amountPaid = what actually moves to payTo in the signed transaction.
+  //
+  // THIS IS THE ONLY NUMBER A SESSION MAY BE CREDITED WITH. Three separate
+  // theft bugs came from crediting a looked-up price while a route charged a
+  // different one (flat 402 + lane-value credit + on-chain refund of the gap).
+  // Deriving the credit from the settled transfer makes that class impossible:
+  // you cannot be credited money you did not send.
+  const amountPaid = transfers
+    .filter((t) => hederaAccountIdsEqual(t.accountId, env.SELLER_ACCOUNT_ID) && BigInt(t.amount) > 0n)
+    .reduce((a, t) => a + Number(t.amount), 0);
+
   return {
     payer,
+    amountPaid,
     key: createHash("sha256").update(txB64).digest("hex").slice(0, 32),
     inspected,
   };
+}
+
+/**
+ * Credit a session from the on-chain payment, never from a price table.
+ * Refuses if the settled amount does not match what this route quoted.
+ */
+function creditFromPayment(s, pay, quotedTinybar, label) {
+  if (!pay.amountPaid || pay.amountPaid <= 0) {
+    return { err: { status: 402, error: "no value transferred to payTo in the signed payment" } };
+  }
+  if (pay.amountPaid !== quotedTinybar) {
+    console.error(`PRICE MISMATCH ${label}: settled ${pay.amountPaid} != quoted ${quotedTinybar}`);
+    return { err: { status: 400,
+      error: "settled amount does not match the quoted price",
+      settledTinybar: pay.amountPaid, quotedTinybar } };
+  }
+  return { res: s.credit(pay.key, pay.amountPaid) };
 }
 
 /**
@@ -523,7 +553,9 @@ app.post("/compute/:lane", async (c) => {
     maxDurationMs: CONFIG.maxDurationMs,
   });
   s.lane = lane; s.unit = "second";
-  const res = s.credit(pay.key, pricing.sessionTinybar);
+  const cr = creditFromPayment(s, pay, pricing.sessionTinybar, `/compute/${lane}`);
+  if (cr.err) return c.json(cr.err, cr.err.status);
+  const res = cr.res;
   sessions.set(s.id, s);
   saveSession(s);
 
@@ -574,13 +606,9 @@ app.post("/session", async (c) => {
   if (c.req.query("cheat") && String(env.ALLOW_CHEAT ?? "false") === "true") {
     s.cheat = Number(c.req.query("cheat"));
   }
-  // Invariant: never credit more than this route's 402 actually charged.
-  // A mismatch here is a refundable-balance exploit, so fail loudly.
-  if (pricing.sessionTinybar !== CONFIG.sessionTinybar) {
-    console.error(`PRICING MISMATCH on /session: credit ${pricing.sessionTinybar} vs charged ${CONFIG.sessionTinybar}`);
-    return c.json({ error: "internal pricing mismatch" }, 500);
-  }
-  const res = s.credit(pay.key, pricing.sessionTinybar);
+  const cr = creditFromPayment(s, pay, CONFIG.sessionTinybar, "/session");
+  if (cr.err) return c.json(cr.err, cr.err.status);
+  const res = cr.res;
   sessions.set(s.id, s);
   saveSession(s); // durable before the buyer is told it has credits
 
@@ -623,7 +651,9 @@ app.post("/topup/:lane/:id", async (c) => {
   if (!pay) return c.json({ error: "no verified payment" }, 402);
 
   const pricing = lanePricing(lane);
-  const res = s.credit(pay.key, pricing.topUpTinybar);
+  const cr = creditFromPayment(s, pay, pricing.topUpTinybar, `/topup/${lane}`);
+  if (cr.err) return c.json(cr.err, cr.err.status);
+  const res = cr.res;
   s.touch(); saveSession(s);
   return c.json({ sessionId: s.id, lane, credited: res.credited,
                   duplicate: res.duplicate, credits: s.credits });
@@ -640,13 +670,9 @@ app.post("/session/:id/topup", async (c) => {
   const pay = paymentContext(c);
   if (!pay) return c.json({ error: "no verified payment" }, 402);
 
-  // Invariant: this route is flat-priced, so it may only credit the flat amount.
-  const topUp = lanePricing(s.lane).topUpTinybar;
-  if (topUp !== CONFIG.topUpTinybar) {
-    console.error(`PRICING MISMATCH on /topup: credit ${topUp} vs charged ${CONFIG.topUpTinybar}`);
-    return c.json({ error: "internal pricing mismatch" }, 500);
-  }
-  const res = s.credit(pay.key, topUp);
+  const cr = creditFromPayment(s, pay, CONFIG.topUpTinybar, "/session/:id/topup");
+  if (cr.err) return c.json(cr.err, cr.err.status);
+  const res = cr.res;
   saveSession(s);
   return c.json({
     sessionId: s.id,
@@ -782,9 +808,6 @@ app.post("/session/:id/close", async (c) => {
     settlementTx: out.settlement?.txId ?? null,
     settlementTxUrl: out.settlement ? hashscan.tx(out.settlement.txId) : null,
     settlementFeeTinybar: out.settlement?.paidToBuyer,
-    // retained for consumers written against the old name; see the correction
-    // note below about who actually collects this fee
-    settlementPaidToBuyerTinybar: out.settlement?.paidToBuyer,
     settlementFeeCollector: env.ANCHOR_FEE_COLLECTOR ?? "fixed at topic creation",
     refundTxUrl: out.refund ? hashscan.tx(out.refund.txId) : null,
     burnCheckpoints: s.checkpoints.length,

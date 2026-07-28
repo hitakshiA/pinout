@@ -44,7 +44,7 @@ console.log(`units billed          ${[...sessions.values()].reduce((a, s) => a +
 console.log(`\nrevenue owed          ${owed.toLocaleString()} tinybar  ($${owedUsd.toFixed(6)})`);
 console.log(`refunded to buyers    ${refunded.toLocaleString()} tinybar  ($${refUsd.toFixed(6)})`);
 console.log(`refund rate           ${owed + refunded ? ((refunded / (owed + refunded)) * 100).toFixed(1) : 0}% of everything paid in`);
-console.log(`seller -> buyer fees  ${paidToBuyer.toLocaleString()} tinybar  ($${feeUsd.toFixed(6)})   [HIP-991]`);
+console.log(`anchor custom fees    ${paidToBuyer.toLocaleString()} tinybar  ($${feeUsd.toFixed(6)})   [HIP-991 -> fixed collector, NOT the paying buyer]`);
 console.log(`\nfee terms (public)    ${fee?.amount} tinybar -> collector ${fee?.collector_account_id}`);
 console.log(`fee schedule key      ${t.fee_schedule_key ? "present" : "ABSENT (frozen)"}`);
 
