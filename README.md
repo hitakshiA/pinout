@@ -1,159 +1,319 @@
+<div align="center">
+
 # Pinout
 
-**Prepaid metered streaming credits over x402 on Hedera.** One x402 `exact` payment buys a
-block of credits; an SSE stream burns them one event at a time; consumption is checkpointed
-to Hedera Consensus Service so the buyer can recompute the bill from the free public mirror
-node and prove the seller did not over-bill.
+**A prepaid meter for anything that streams — settled over [x402](https://x402.org) on [Hedera](https://hedera.com).**
 
-Settlement asset is **HBAR** only. Everything below that is marked ✅ has a transaction id
-you can open on HashScan.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![x402](https://img.shields.io/badge/x402-v2%20%C2%B7%20exact-6366f1)](https://docs.x402.org)
+[![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io/testnet)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
+
+One payment buys credits · a live stream burns them per event · the client tops up
+mid-stream without dropping the connection · unused credits are refunded on-chain ·
+and anyone can recompute the bill from the public ledger.
+
+</div>
 
 ---
 
-## The gap this fills
+## The problem
 
-Hedera's own x402 documentation lists, under *Constraints & Limitations*:
+x402 pays for **one thing, once**. That breaks the moment consumption is continuous:
 
-> "Discrete per-request design (**not streaming** or multi-hop routing)"
+- **You can't sign a payment per token.** The latency and fee overhead destroy the use case.
+- **You can't pay upfront.** Neither party knows how long the stream will run.
 
-x402's core loop is per-request by construction, and streaming breaks it twice: you cannot
-sign a transaction per token of an LLM stream (latency and fee overhead defeat the use
-case), and you cannot pay up front for a stream whose length nobody knows.
+This isn't a hypothesis. Hedera's own x402 documentation lists it under *Constraints*:
 
-x402 issue [#2273](https://github.com/x402-foundation/x402/issues/2273) —
-*"metered-session: prepaid metered sessions with auto-refund for streaming x402 transports"*
-— proposes the fix and has sat **open with zero comments since 2026-05-12**. Its first named
-use case is "LLM token streams" and its `unit` enum already contains `token`. It also states
-plainly: *"Client signs a PaymentPayload for the upfront budget using any existing scheme.
-No new scheme."* That matters on Hedera, where the facilitators advertise only `exact`.
+> Discrete per-request design (**not streaming** or multi-hop routing)
 
-Pinout implements that proposal and answers its open questions with measurements.
+[x402 issue #2273](https://github.com/x402-foundation/x402/issues/2273) proposes the fix —
+`metered-session`, prepaid sessions with auto-refund — and has sat **open with zero
+comments** since May 2026. Its first named use case is *"LLM token streams"* and its
+`unit` enum already contains `token`.
 
-## Status
+Pinout implements that proposal, and answers its open questions with measurements.
 
-| Capability | State | Evidence |
-| --- | --- | --- |
-| x402 `exact` payment, buyer pays zero network fee | ✅ | `0.0.9185802@1785181172.680425137` |
-| Both facilitators (x402.org, blocky402) | ✅ | one settlement each, identical fees |
-| Real HTTP 402 → `PAYMENT-SIGNATURE` → 200 over the wire | ✅ | `scripts/e2e.mjs` |
-| SSE stream burning one credit per event | ✅ | 2,600 events, one session |
-| Burn checkpoints to HCS | ✅ | 11 checkpoints, topic `0.0.9795896` |
-| Mid-stream top-up, socket never dropped | ✅ | fired at 399 credits remaining |
-| HIP-991 settlement anchor, seller pays buyer | ✅ | topic `0.0.9795865` |
-| Refund gated behind the anchor | ✅ | 80,000 tinybar returned |
-| Independent verifier, mirror node only | ✅ | `scripts/verify.mjs`, exit 0/1 |
-| Verifier catches a cheating seller | ✅ | `--cheat 400` → detected |
-| Reproducible cost benchmark | ✅ | `scripts/bench-hcs.mjs` |
-| MCP server — paid agent tools | ✅ | `src/mcp.mjs`, driven by a real MCP client |
-| Agent spend caps enforced before signing | ✅ | `maxPerCall` / `budget`, typed errors |
-| `offer-and-receipt` signed **offers** (JWS/ES256K) | ✅ | live in every 402, `src/receipt.mjs` |
-| `offer-and-receipt` signed **receipts** on close | ✅ | binds payment → burn ledger seq → anchor |
-| Session persistence across restart | ✅ | append-only `sessions.jsonl` |
-| `bazaar` discovery extension | ⚠️ emitted in 402, nothing indexes it | — |
-| Hedera Agent Kit v4 plugin | ❌ not built | MCP server covers the same surface |
-| USDC / HTS settlement | ❌ out of scope | HBAR only, by choice |
-
-## Run it
-
-```bash
-npm install
-cp .env.example .env          # fill in accounts, or use real env vars
-node scripts/e2e.mjs          # full flow, prints HashScan links
-node scripts/verify.mjs <sessionId>
-node scripts/e2e.mjs --cheat 400   # dishonest seller
-node scripts/verify.mjs <sessionId>   # exits 1
-```
+---
 
 ## How it works
 
-**Session mint.** `POST /session` returns **402** with a `PAYMENT-REQUIRED` header carrying
-base64 JSON: `scheme: "exact"`, `network: "hedera:testnet"`, `amount`, `asset: "0.0.0"`,
-`payTo`, `maxTimeoutSeconds`, and `extra.feePayer`. The client builds a bare
-`TransferTransaction`, sets `transactionId.accountId` to `extra.feePayer`, signs with its
-ECDSA key, and retries with `PAYMENT-SIGNATURE`. The server calls the facilitator's
-`/verify` then `/settle`, and **only after settlement succeeds** mints credits. Minting on
-the 402 response instead would mean a failed settle leaves the buyer streaming free.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Pinout server
+    participant F as x402 facilitator
+    participant H as Hedera
 
-`extra.feePayer` is resolved from `GET /supported` at boot and never hardcoded — the two
-live facilitators use different accounts (`0.0.9185802` vs `0.0.7162784`).
+    C->>S: POST /session
+    S-->>C: 402 + PAYMENT-REQUIRED<br/>(signed offer, price, feePayer)
+    C->>C: sign bare TransferTransaction
+    C->>S: retry + PAYMENT-SIGNATURE
+    S->>F: verify
+    F-->>S: valid
+    S-->>C: 200 · credits + session secret
+    S->>F: settle (after handler succeeds)
+    F->>H: submit — facilitator pays ALL gas
+    Note over C,H: buyer's balance moves by exactly the price
 
-**Consumption.** SSE. Each delivered event decrements the balance. `SessionUpdate` frames
-carry `unitsConsumed` and `remainingBalance`, per #2273.
+    loop every event
+        S-->>C: SSE event · 1 credit burned
+    end
+    S->>H: burn checkpoint → plain HCS topic
+    Note over C,S: balance low → top-up 402 cycle<br/>stream never drops
 
-**Burn ledger (tier 1).** Every N events a checkpoint goes to a plain HCS topic: session id,
-payer, the funding transaction ids, unit price, pricing version, the half-open event range,
-cumulative burn, remaining balance, and a SHA-256 commitment over the event ids the client
-actually received. HCS assigns a `sequence_number` and a consensus-computed `running_hash`,
-so the chain is built by the network, not by the party being audited.
+    C->>S: POST /close
+    S->>H: HIP-991 settlement anchor<br/>(seller pays the buyer)
+    H-->>S: anchor landed
+    S->>H: refund unused credits
+    S-->>C: signed receipt (JWS/ES256K)
+```
 
-**Top-up.** When the balance crosses the threshold the client runs another 402 cycle *while
-the stream is open* and splices the credits in. Mints are idempotent on the settlement
-transaction id, so a retry cannot double-credit.
+The refund is **gated behind the anchor**. The seller cannot keep an unused balance
+without paying to publish its final numbers on an immutable ledger.
 
-**Settlement anchor (tier 2).** On close the seller writes one message to a **HIP-991
-fee-charging topic**, paying a fee **to the buyer**. It declares total consumed, amount owed,
-refund due, and the burn ledger's final `sequence_number` + `running_hash` — binding tier 1
-to tier 2, so burn history cannot be restated without invalidating the anchor.
+---
 
-**This anchor is a precondition, not a receipt.** `settleSession()` refuses to issue the
-refund until it lands. The seller cannot close a session and keep the unused balance without
-paying to publish its final numbers.
+## The two-tier ledger
 
-**Verification.** The buyer replays both topics from `testnet.mirrornode.hedera.com` — free,
-public, unauthenticated — and checks contiguity, the tier binding, the anchor's arithmetic,
-the claimed burn count against events actually received, and every per-checkpoint commitment.
+The original design checkpointed everything to a HIP-991 fee-charging topic.
+Measurement killed it:
 
-## What the measurements changed
+| Payload | Plain HCS topic | HIP-991 topic |
+|--------:|----------------:|--------------:|
+|   100 B |       $0.00017  |    **$0.0500** |
+| 1,000 B |       $0.00078  |    **$0.0500** |
+| 4,000 B |       $0.00080  |    **$0.0500** |
 
-The original design checkpointed to a HIP-991 topic on every interval. Measurement killed
-that. See [FINDINGS.md](./FINDINGS.md):
+A fee-charging topic costs a **flat ~$0.050 per message — 62× a plain topic —
+independent of payload size *and* of the fee amount.** So the meter is split:
 
-> Attaching any custom fee to an HCS topic costs the submitter a flat **0.7267 HBAR ≈ $0.050**
-> per message — **62× a plain-topic submit** — independent of payload size *and* of the fee
-> amount. A plain topic scales per-byte and matches HIP-991's own quoted $0.0008.
+```mermaid
+flowchart LR
+    subgraph T1["Tier 1 · burn ledger"]
+        A["plain HCS topic<br/>~$0.0008/write<br/>every N events"]
+    end
+    subgraph T2["Tier 2 · settlement anchor"]
+        B["HIP-991 topic<br/>~$0.050/write<br/>batched, rare"]
+    end
+    E[SSE events] --> A
+    A -->|"final seq + consensus running_hash"| B
+    B -->|"custom fee"| BUY["Buyer's account"]
+    B --> R[Refund released]
 
-So the meter is two-tier: cheap plain-HCS checkpoints at high frequency, one HIP-991 anchor
-at the point where its cost is amortized and its incentive actually bites. This is also the
-measured answer to open question #1 of #2273 — *"synchronous on-chain refund on close vs.
-signed receipt + batched settlement?"* — namely **batched settlement**, and why.
+    style T1 stroke-dasharray: 4
+    style BUY fill:#1a7f37,color:#fff
+```
 
-Both tiers are HCS. **There is no smart contract anywhere in this system.**
+Tier 2 embeds tier 1's final `sequence_number` and consensus `running_hash`, so burn
+history cannot be restated without invalidating the anchor that committed to it.
 
-## What is claimed, and what is not
+**Both tiers are HCS. There is no smart contract anywhere in this system.**
 
-Pinout claims a **tamper-evident, independently recomputable consumption ledger**. It does
-not claim trustless delivery proof.
+---
 
-The distinction is demonstrated, not asserted. Under `--cheat 400` the verifier's first three
-checks — contiguity, tier binding, settlement arithmetic — all still **pass**. The ledger is
-internally consistent and immutable; that is what HCS guarantees. What catches the seller is
-comparing the ledger against the client's own record of received event ids. A seller who
-fabricates events *and* the client never notices is outside what this proves.
+## Quickstart
 
-## Prior art, honestly
+```bash
+git clone https://github.com/hitakshiA/pinout.git
+cd pinout && npm install
+cp .env.example .env        # fill in accounts, or use real env vars
+npm run check-config
+```
 
-- [`@vybenetwork/x402-client`](https://github.com/vybenetwork/x402-client) — the product
-  shape (prepaid WS credits, auto-topup, spend caps) is re-derived from Vybe's commercial
-  SDK. Not a fork; different chain, different trust model. Their headline feature —
-  "the wallet only needs USDC, no SOL for gas" — required custom relayer infrastructure.
-  On Hedera it is one `extra.feePayer` field.
-- [`Risingtell/meter402`](https://github.com/Risingtell/meter402) — per-tick streaming
-  settlement for x402, chain-agnostic (Casper, Base, Arc). Settles one payment *per tick*,
-  which is what #2273 says defeats WS use cases. Its verifier checks the token Transfer
-  ledger — payments, not consumption.
-- [`tomrowbo/hak-mppx-hedera-plugin`](https://github.com/tomrowbo/hak-mppx-hedera-plugin) —
-  session payments on Hedera via MPP, using an **on-chain Solidity escrow contract** and
-  EIP-712 vouchers. The closest neighbour; the no-contract property is the distinction.
-- `qcornell/hedera-payment-sessions` — allowance-based spending budgets (HIP-336). A budget
-  caps what *may* be spent; a meter counts what *was* consumed. Different primitive.
+You need two funded Hedera **testnet** accounts with **ECDSA (secp256k1)** keys.
+Get one from [portal.hedera.com](https://portal.hedera.com), then:
 
-## Known limitations
+```bash
+node scripts/new-role-account.mjs SELLER 60   # creates + funds the seller
+```
 
-- Sessions are in-memory; a server restart loses them. The ledger survives, the session does not.
-- Facilitator equivalence is established from **one trial each**, not under concurrency.
-- The `bazaar` extension is emitted in the 402 body but nothing indexes it yet.
-- ECDSA (secp256k1) keys only. ED25519 fails *silently* in EVM-adjacent tooling — viem
-  accepts any 32-byte hex and derives the wrong identity.
-- Accounts auto-created via EVM alias are **hollow** (`key: null`) until they sign something,
-  which breaks the facilitator's `AccountInfoQuery` signature check. Use
-  `scripts/hydrate-key.mjs`, or create accounts with `AccountCreateTransaction`.
+Run the full flow — it prints a HashScan link for every on-chain step:
+
+```bash
+npm run e2e
+npm run verify -- <sessionId>
+```
+
+### Watch it catch a cheating seller
+
+```bash
+npm run e2e -- --cheat 400        # seller inflates the ledger
+npm run verify -- <sessionId>     # exits 1
+```
+
+```
+1. contiguity              PASS
+2. tier binding            PASS
+3. settlement arithmetic   PASS
+4. ledger vs received      FAIL  claims 3000, client received 2600
+                                 (+400 phantom = 80000 tinybar overcharge)
+5. checkpoint commitments  FAIL  11/11 do not match
+```
+
+Checks 1–3 passing while the seller cheats is the point, not a defect — see
+[Trust boundary](#trust-boundary).
+
+---
+
+## API
+
+| Method | Route | Paid | Auth | Purpose |
+|---|---|:--:|:--:|---|
+| `GET` | `/` | — | — | Service descriptor, live pricing, topic links |
+| `POST` | `/session` | ✅ | — | Open a session. Returns credits + **session secret** |
+| `GET` | `/session/:id/stream` | — | 🔑 | SSE. Burns one credit per event |
+| `POST` | `/session/:id/topup` | ✅ | 🔑 | Add credits mid-stream |
+| `POST` | `/session/:id/close` | — | 🔑 | Settlement anchor → refund → signed receipt |
+| `GET` | `/session/:id` | — | 🔑 | Session status |
+
+🔑 = `Authorization: Bearer <sessionSecret>`, issued once at mint.
+
+### Session lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> OPENING
+    OPENING --> ACTIVE: payment settles
+    ACTIVE --> PAUSED: balance exhausted
+    PAUSED --> ACTIVE: top-up
+    ACTIVE --> SETTLING: close / max-duration
+    PAUSED --> SETTLING
+    SETTLING --> CLOSED: anchor lands, then refund
+    CLOSED --> [*]
+```
+
+Abandoned sessions are reaped on a timer and settled **in batches under one anchor** —
+per-session cleanup would cost the seller ~0.73 HBAR against a 0.004 HBAR session
+price, turning abandonment into a drain.
+
+---
+
+## For AI agents
+
+An MCP server exposes the lifecycle as tools. No tool returns data before its payment
+settles on-chain.
+
+```bash
+npm run mcp
+```
+
+`open_session` · `stream` · `close_session` · `verify_session` · `spend_report`
+
+Spend guards (`maxPerCallTinybar`, `budgetTinybar`) reject a challenge **before any
+signature exists**, so a mispriced or injected 402 can never put funds at risk.
+
+> An independent agent — given only a URL and a private key, forbidden from reading
+> this source — worked out the protocol from the HTTP responses alone and paid.
+> Its balance moved by exactly the purchase amount and not one tinybar more.
+
+---
+
+## Verification
+
+The verifier trusts **only** the free public mirror node and the buyer's own record of
+received events. No API key, nothing to trust.
+
+```mermaid
+flowchart TD
+    V[verifier] --> M[(public mirror node)]
+    M --> C1{1 · checkpoints contiguous?}
+    C1 --> C2{2 · anchor binds ledger head?}
+    C2 --> C3{3 · settlement arithmetic?}
+    C3 --> C4{4 · burn count = events received?}
+    C4 --> C5{5 · commitments match?}
+    C5 --> P["exit 0 · PASSED"]
+    C4 -->|no| F["exit 1 · FAILED<br/>names the exact overcharge"]
+    C5 -->|no| F
+    C4 -.->|no client record| I["exit 2 · INCONCLUSIVE"]
+
+    style P fill:#1a7f37,color:#fff
+    style F fill:#b62324,color:#fff
+    style I fill:#9a6700,color:#fff
+```
+
+### Trust boundary
+
+Pinout claims a **tamper-evident, independently recomputable consumption ledger**.
+It does **not** claim trustless delivery proof.
+
+Under `--cheat`, checks 1–3 still pass. The ledger genuinely is immutable and
+internally consistent — that is what HCS guarantees, and all it guarantees. Only
+comparing it against the buyer's own record exposes fabrication. A seller that
+fabricates events *and* whose client never notices is outside what this proves.
+
+`INCONCLUSIVE` exists for exactly that reason: without a client record, the verifier
+refuses to say "passed".
+
+---
+
+## Why Hedera
+
+| Property | What it buys |
+|---|---|
+| **Fee-payer model** | The facilitator pays all network fees. The buyer needs **no fee headroom** — it can hold exactly the purchase amount and transact. |
+| **HIP-991 topic fees** | A log that charges to write, with the fee pointed at **the buyer**. The seller pays its own auditor. No EVM chain does this without deploying a contract. |
+| **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
+| **Free mirror node** | Public, unauthenticated, no signup — so verification costs the buyer nothing. |
+
+Full measured numbers, methodology, and the bugs found along the way:
+**[docs/measurements.md](./docs/measurements.md)**
+
+---
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HEDERA_ACCOUNT_ID` / `HEDERA_PRIVATE_KEY` | — | Buyer. Also the HIP-991 fee collector |
+| `SELLER_ACCOUNT_ID` / `SELLER_PRIVATE_KEY` | — | Seller. Owns both topics |
+| `BURN_TOPIC_ID` | — | Tier 1, plain HCS |
+| `TOPIC_ID` | — | Tier 2, HIP-991 |
+| `PRICE_PER_EVENT_TINYBAR` | `200` | Unit price |
+| `CHECKPOINT_EVERY` | `250` | Events per burn checkpoint |
+| `MAX_SESSION_DURATION_MS` | `600000` | Idle timeout before auto-settle |
+| `FACILITATOR` | `x402` | `x402` or `blocky402` |
+
+`process.env` overrides `.env`; `.env` is optional.
+
+> [!WARNING]
+> **ECDSA (secp256k1) keys only.** An ED25519 key fails *silently* in EVM-adjacent
+> tooling — `viem` accepts any 32-byte hex and derives the wrong identity, surfacing
+> as a confusing "signature mismatch".
+
+> [!NOTE]
+> Accounts auto-created via EVM alias are **hollow** (`key: null`) until they sign
+> something, which breaks the facilitator's `AccountInfoQuery` check. Use
+> `scripts/hydrate-key.mjs`, or create accounts with `AccountCreateTransaction`.
+
+---
+
+## Built on
+
+[`@x402/core`](https://www.npmjs.com/package/@x402/core) ·
+[`@x402/hedera`](https://www.npmjs.com/package/@x402/hedera) (exact client **and** server) ·
+[`@x402/hono`](https://www.npmjs.com/package/@x402/hono) ·
+[`@hiero-ledger/sdk`](https://www.npmjs.com/package/@hiero-ledger/sdk) ·
+[`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk)
+
+Implements the x402 [`metered-session`](https://github.com/x402-foundation/x402/issues/2273),
+[`offer-and-receipt`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/extension-offer-and-receipt.md)
+(JWS/ES256K profile) and [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) extensions.
+
+---
+
+## Status
+
+Working end to end on Hedera testnet. Known limits, stated plainly:
+
+- Sessions are single-node and held in memory, persisted to an append-only log.
+  A crash loses at most `CHECKPOINT_EVERY` events, and **the loss falls on the seller**.
+- The `bazaar` extension is emitted but nothing indexes it yet.
+- Facilitator equivalence rests on one trial each, not a load test.
+- Testnet only.
+
+## License
+
+[MIT](./LICENSE) © Hitakshi Arora

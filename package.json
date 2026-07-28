@@ -19,9 +19,9 @@
     "e2e": "node scripts/e2e.mjs",
     "verify": "node scripts/verify.mjs",
     "bench": "node scripts/bench-hcs.mjs",
+    "mcp": "node src/mcp.mjs",
     "server": "node -e \"import('./src/server.mjs').then(m=>m.start())\"",
-    "check-config": "node -e \"import('./src/config.mjs').then(m=>{m.requireConfig();console.log('config OK')})\"",
-    "mcp": "node src/mcp.mjs"
+    "check-config": "node -e \"import('./src/config.mjs').then(m=>{m.requireConfig();console.log('config OK')})\""
   },
   "version": "0.1.0",
   "description": "Prepaid metered streaming credits over x402 on Hedera",
