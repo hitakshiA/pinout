@@ -41,7 +41,9 @@ rather than being staged.
 
 ## Status
 
-Planning. Nothing here is built yet.
+**Working, verified on-chain.** Agents have paid for and used it end to end:
+per-second metering, real sandboxes on Daytona (CPU) and Modal (GPU), refunds
+for unheld seconds, and independent bill verification from the public mirror node.
 
 - [PLAN.md](./PLAN.md) — verified provider APIs and pricing, budget, build order, gotchas
 - [rates.json](./rates.json) — rate card. `cpu-small` is flagged `_costVerified: false`

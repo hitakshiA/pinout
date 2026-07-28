@@ -46,7 +46,8 @@ const TOOLS = [
       properties: {
         sessionId: { type: "string" },
         n: { type: "number", description: "events to consume", default: 200 },
-        provider: { type: "string", enum: ["llm", "mirror"], default: "llm" },
+        provider: { type: "string", enum: ["llm", "mirror", "compute"], default: "llm" },
+        code: { type: "string", description: "Python source to run when provider=compute" },
         autoTopUp: { type: "boolean", default: true },
       },
       required: ["sessionId"],
@@ -116,6 +117,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const { terminated } = await client.stream(a.sessionId, {
           n: a.n ?? 200,
           provider: a.provider,
+          code: a.code,
           onEvent: (e) => events.push(e),
           onLow: async () => {
             if (a.autoTopUp === false || topUps >= 2) return;

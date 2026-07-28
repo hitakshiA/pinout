@@ -104,7 +104,8 @@ class StreamTool extends PinoutBaseTool {
   parameters = z.object({
     sessionId: z.string().describe("session id from pinout_open_session"),
     n: z.number().optional().describe("events to consume (default 200)"),
-    provider: z.enum(["llm", "mirror"]).optional(),
+    provider: z.enum(["llm", "mirror", "compute"]).optional(),
+    code: z.string().optional().describe("Python source to execute when provider is 'compute'"),
     autoTopUp: z.boolean().optional().describe("buy more credits if low (default true)"),
   });
 
@@ -115,6 +116,7 @@ class StreamTool extends PinoutBaseTool {
     const { terminated } = await c.stream(p.sessionId, {
       n: p.n ?? 200,
       provider: p.provider,
+      code: p.code,
       onEvent: (e) => events.push(e),
       onLow: async () => {
         if (p.autoTopUp === false || topUps >= 2) return;

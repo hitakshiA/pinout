@@ -95,7 +95,13 @@ export class PinoutClient {
       settledOnChain: Boolean(r.settlement?.success),
     };
   }
-  async openSession(opts = "") {
+  async openSession(laneOrOpts = "") {
+    const opts = typeof laneOrOpts === "string" && laneOrOpts.startsWith("?")
+      ? laneOrOpts
+      : laneOrOpts ? `?lane=${laneOrOpts}` : "";
+    return this.#open(opts);
+  }
+  async #open(opts) {
     const out = this.#withSettlement(await this.pay(`/session${opts}`));
     // The secret is returned exactly once; hold it for the session's lifetime.
     if (out.sessionSecret) this.secrets.set(out.sessionId, out.sessionSecret);
@@ -119,9 +125,12 @@ export class PinoutClient {
    * recomputed independently later. Fires onLow when the balance crosses
    * the top-up threshold — the socket is NOT dropped to top up.
    */
-  async stream(sessionId, { n = 500, provider, onEvent, onLow, onCheckpoint } = {}) {
+  async stream(sessionId, { n = 500, provider, code, prompt, onEvent, onLow, onCheckpoint } = {}) {
     const q = new URLSearchParams({ n: String(n) });
     if (provider) q.set("provider", provider);
+    if (prompt) q.set("prompt", prompt);
+    // Arbitrary source is base64'd so quoting and newlines survive the URL.
+    if (code) q.set("code", Buffer.from(code, "utf8").toString("base64"));
     const res = await fetch(`${this.base}/session/${sessionId}/stream?${q}`,
       { headers: this.#auth(sessionId) });
     if (!res.ok) throw new Error(`stream ${res.status}`);

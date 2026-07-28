@@ -31,6 +31,7 @@ import {
   Session, CAUSE, flushCheckpoint, settleSession, settleExpired, makeClient,
 } from "./session.mjs";
 import { getProvider } from "../providers/index.mjs";
+import { RATES } from "../providers/compute.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
 
@@ -106,6 +107,50 @@ function paymentContext(c) {
     key: createHash("sha256").update(txB64).digest("hex").slice(0, 32),
     inspected,
   };
+}
+
+/**
+ * Price a session for a lane. Compute seconds cost what the lane costs — a flat
+ * rate across lanes either loses money on GPU or overcharges on CPU. Lane is
+ * fixed at session open so the 402 can be priced honestly and the signed offer
+ * commits to it.
+ */
+export function lanePricing(lane) {
+  if (!lane || lane === "llm" || lane === "mirror") {
+    return { lane: lane ?? "llm", unit: "token",
+             pricePerUnit: CONFIG.pricePerEvent, sessionTinybar: CONFIG.sessionTinybar,
+             topUpTinybar: CONFIG.topUpTinybar };
+  }
+  if (lane === "local") {
+    return { lane, unit: "second", pricePerUnit: 1000, sessionTinybar: 300_000, topUpTinybar: 150_000 };
+  }
+  const l = RATES.lanes[lane];
+  if (!l) throw new Error(`unknown lane ${lane}`);
+  const pricePerUnit = l.creditTinybar;
+  // Default budget = 120 seconds of that lane, rounded to a whole tinybar.
+  return { lane, unit: "second", pricePerUnit, provider: l.provider,
+           sessionTinybar: pricePerUnit * 120, topUpTinybar: pricePerUnit * 60 };
+}
+
+/**
+ * Pull ?lane= out of whatever the transport hands the price callback.
+ * HTTPRequestContext exposes `path`; depending on adapter it may or may not
+ * carry the query string, so fall back to the adapter's raw request.
+ */
+export function laneFromContext(ctx) {
+  const candidates = [
+    ctx?.path,
+    ctx?.adapter?.getUrl?.(),
+    ctx?.adapter?.request?.url,
+    ctx?.adapter?.url,
+  ].filter((x) => typeof x === "string");
+  for (const c of candidates) {
+    const q = c.indexOf("?");
+    if (q === -1) continue;
+    const lane = new URLSearchParams(c.slice(q + 1)).get("lane");
+    if (lane) return lane;
+  }
+  return null;
 }
 
 const requirements = (amountTinybar, resourceUrl) => ({
@@ -197,6 +242,28 @@ function authorised(c) {
   return { s };
 }
 
+const BAZAAR_EXT = {
+  "offer-receipt": {},
+  bazaar: {
+    info: {
+      input: { type: "http", method: "POST" },
+      output: { type: "json", example: { sessionId: "uuid", credits: 120 } },
+    },
+    schema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        input: { type: "object", properties: {
+          type: { type: "string", const: "http" }, method: { type: "string", enum: ["POST"] },
+        }, required: ["type", "method"], additionalProperties: false },
+        output: { type: "object", properties: { type: { type: "string" }, example: { type: "object" } },
+                  required: ["type"] },
+      },
+      required: ["input"],
+    },
+  },
+};
+
 const app = new Hono();
 
 /**
@@ -237,93 +304,50 @@ function bazaarCatalog() {
  * callbacks — the pattern the Hedera reference repos bless — so a top-up can
  * later be priced from the session's observed burn rate.
  */
-const routes = {
-  "POST /session": {
-    extensions: {
-      "offer-receipt": {},
-      // The bazaar extension requires BOTH `info` and a `schema` that validates
-      // it. Omitting `schema` is silently malformed until the official
-      // middleware validates the route.
-      bazaar: {
-        info: {
-          input: { type: "http", method: "POST" },
-          output: { type: "json", example: { sessionId: "uuid", credits: 2000 } },
-        },
-        schema: {
-          $schema: "https://json-schema.org/draft/2020-12/schema",
-          type: "object",
-          properties: {
-            input: {
-              type: "object",
-              properties: {
-                type: { type: "string", const: "http" },
-                method: { type: "string", enum: ["POST"] },
-              },
-              required: ["type", "method"],
-              additionalProperties: false,
-            },
-            output: {
-              type: "object",
-              properties: { type: { type: "string" }, example: { type: "object" } },
-              required: ["type"],
-            },
-          },
-          required: ["input"],
-        },
-      },
-    },
+/**
+ * One priced route per lane. The x402 middleware resolves a route's price at
+ * registration, so a single endpoint cannot honestly quote different lanes —
+ * and a lane must be priced in the 402 the buyer signs. Separate routes also
+ * let the bazaar catalogue advertise each lane as its own payable resource.
+ */
+const LANES = { ...Object.fromEntries(Object.keys(RATES.lanes).map((l) => [l, true])), local: true };
+
+function laneRoute(lane) {
+  const p = lanePricing(lane);
+  return {
     accepts: [{
       scheme: "exact", network: NETWORK, payTo: env.SELLER_ACCOUNT_ID,
-      price: () => ({ amount: String(CONFIG.sessionTinybar), asset: HBAR_ASSET }),
+      price: { amount: String(p.sessionTinybar), asset: HBAR_ASSET },
       maxTimeoutSeconds: 180,
     }],
-    description: "Open a prepaid metered stream session",
-    serviceName: "Pinout",
-    tags: ["streaming", "metered", "llm", "x402", "hedera"],
+    description: `Rent ${lane} by the second (${p.pricePerUnit} tinybar/s, ${p.sessionTinybar} tinybar buys ${Math.floor(p.sessionTinybar / p.pricePerUnit)}s)`,
+    serviceName: "Pinout Compute",
+    tags: ["compute", "metered", "x402", "hedera", lane],
     mimeType: "application/json",
-  },
-  "POST /session/:id/topup": {
-    extensions: {
-      "offer-receipt": {},
-      // The bazaar extension requires BOTH `info` and a `schema` that validates
-      // it. Omitting `schema` is silently malformed until the official
-      // middleware validates the route.
-      bazaar: {
-        info: {
-          input: { type: "http", method: "POST" },
-          output: { type: "json", example: { sessionId: "uuid", credits: 2000 } },
-        },
-        schema: {
-          $schema: "https://json-schema.org/draft/2020-12/schema",
-          type: "object",
-          properties: {
-            input: {
-              type: "object",
-              properties: {
-                type: { type: "string", const: "http" },
-                method: { type: "string", enum: ["POST"] },
-              },
-              required: ["type", "method"],
-              additionalProperties: false,
-            },
-            output: {
-              type: "object",
-              properties: { type: { type: "string" }, example: { type: "object" } },
-              required: ["type"],
-            },
-          },
-          required: ["input"],
-        },
-      },
-    },
+    extensions: BAZAAR_EXT,
+  };
+}
+
+const routes = {
+  "POST /session": {
     accepts: [{
       scheme: "exact", network: NETWORK, payTo: env.SELLER_ACCOUNT_ID,
-      price: () => ({ amount: String(CONFIG.topUpTinybar), asset: HBAR_ASSET }),
+      price: { amount: String(CONFIG.sessionTinybar), asset: HBAR_ASSET },
+      maxTimeoutSeconds: 180,
+    }],
+    description: "Open a prepaid metered stream session (token-billed lanes)",
+    serviceName: "Pinout", tags: ["streaming", "metered", "llm", "x402", "hedera"],
+    mimeType: "application/json", extensions: BAZAAR_EXT,
+  },
+  ...Object.fromEntries(Object.keys(LANES).map((l) => [`POST /compute/${l}`, laneRoute(l)])),
+  "POST /session/:id/topup": {
+    accepts: [{
+      scheme: "exact", network: NETWORK, payTo: env.SELLER_ACCOUNT_ID,
+      price: { amount: String(CONFIG.topUpTinybar), asset: HBAR_ASSET },
       maxTimeoutSeconds: 180,
     }],
     description: "Top up an open session without dropping the stream",
-    serviceName: "Pinout",
-    mimeType: "application/json",
+    serviceName: "Pinout", mimeType: "application/json", extensions: BAZAAR_EXT,
   },
 };
 
@@ -347,6 +371,18 @@ app.use("*", paymentMiddleware(routes, resourceServer));
 // Discovery: the bazaar extension declares the shape, this endpoint makes it
 // enumerable so an agent can find these resources without being told the URLs.
 app.get("/bazaar", (c) => c.json(bazaarCatalog()));
+
+// Machine-readable lane catalogue. An agent must be able to find the compute
+// capability from HTTP alone — a black-box consumer previously could not.
+app.get("/lanes", (c) => c.json({
+  unit: "second",
+  note: "You are billed per second you HOLD the machine, from credits bought with POST /session?lane=<lane>. Unused seconds are refunded at close.",
+  lanes: Object.entries(RATES.lanes).map(([lane, v]) => ({
+    lane, provider: v.provider, tinybarPerSecond: v.creditTinybar,
+    vcpu: v.vcpu, memGiB: v.memGiB, gpu: v.gpu ?? null,
+    sessionTinybar: v.creditTinybar * 120,
+  })).concat([{ lane: "local", provider: "builtin", tinybarPerSecond: 1000, sessionTinybar: 300000 }]),
+}));
 app.get("/.well-known/x402", (c) => c.json(bazaarCatalog()));
 
 app.get("/", (c) => c.json({
@@ -366,25 +402,73 @@ app.get("/", (c) => c.json({
     burnTopicUrl: hashscan.topic(env.BURN_TOPIC_ID),
     settlementTopicUrl: hashscan.topic(env.TOPIC_ID),
   },
-  discovery: { bazaar: "/bazaar", wellKnown: "/.well-known/x402" },
+  discovery: { bazaar: "/bazaar", wellKnown: "/.well-known/x402", lanes: "/lanes" },
+  compute: {
+    description: "Rent a real machine and run your own code on it, billed per second held.",
+    howTo: [
+      "POST /session?lane=<lane>            pay the 402; you get credits and a sessionSecret",
+      "GET  /session/:id/stream?provider=compute&code=<base64 python>&n=<max seconds>",
+      "POST /session/:id/close              releases the machine and refunds unheld seconds",
+      "all session calls need: Authorization: Bearer <sessionSecret>",
+    ],
+    lanes: Object.fromEntries(Object.entries(RATES.lanes).map(([k, v]) => [k, {
+      provider: v.provider, tinybarPerSecond: v.creditTinybar,
+      vcpu: v.vcpu, memGiB: v.memGiB, gpu: v.gpu ?? null,
+    }])),
+  },
   agentInterfaces: { mcp: "npm run mcp", agentKitPlugin: "src/agent-kit-plugin.mjs" },
   facilitator: CONFIG.facilitator,
   feePayer: FEE_PAYER,
 }));
 
+app.post("/compute/:lane", async (c) => {
+  const lane = c.req.param("lane");
+  if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}`, lanes: Object.keys(LANES) }, 404);
+  const pay = paymentContext(c);
+  if (!pay) return c.json({ error: "no verified payment" }, 402);
+  const pricing = lanePricing(lane);
+
+  const s = new Session({
+    payer: pay.payer, pricePerEvent: pricing.pricePerUnit,
+    checkpointEvery: CONFIG.checkpointEvery, topUpThreshold: CONFIG.topUpThreshold,
+    maxDurationMs: CONFIG.maxDurationMs,
+  });
+  s.lane = lane; s.unit = "second";
+  const res = s.credit(pay.key, pricing.sessionTinybar);
+  sessions.set(s.id, s);
+  saveSession(s);
+
+  return c.json({
+    sessionId: s.id, sessionSecret: s.secret,
+    lane, provider: pricing.provider ?? "builtin", unit: "second",
+    credits: res.credited, secondsPurchased: res.credited,
+    pricePerSecondTinybar: pricing.pricePerUnit,
+    maxSessionDurationSeconds: Math.floor(s.maxDurationMs / 1000),
+    howToRun: `GET /session/${s.id}/stream?provider=compute&n=<maxSeconds>&code=<base64 python>  with Authorization: Bearer <sessionSecret>`,
+  });
+});
+
 app.post("/session", async (c) => {
   const pay = paymentContext(c);
   if (!pay) return c.json({ error: "no verified payment" }, 402);
 
+  // The lane is fixed for the life of the session: it determined the price the
+  // buyer just paid, so it cannot change afterwards.
+  let pricing;
+  try { pricing = lanePricing(c.req.query("lane")); }
+  catch (e) { return c.json({ error: e.message }, 400); }
+
   const s = new Session({
     payer: pay.payer,
-    pricePerEvent: CONFIG.pricePerEvent,
+    pricePerEvent: pricing.pricePerUnit,
     checkpointEvery: CONFIG.checkpointEvery,
     topUpThreshold: CONFIG.topUpThreshold,
     maxDurationMs: CONFIG.maxDurationMs,
   });
+  s.lane = pricing.lane;
+  s.unit = pricing.unit;
   if (c.req.query("cheat")) s.cheat = Number(c.req.query("cheat"));
-  const res = s.credit(pay.key, CONFIG.sessionTinybar);
+  const res = s.credit(pay.key, pricing.sessionTinybar);
   sessions.set(s.id, s);
   saveSession(s); // durable before the buyer is told it has credits
 
@@ -397,7 +481,9 @@ app.post("/session", async (c) => {
     pricePerEventTinybar: s.pricePerEvent,
     payer: s.payer,
     // #2273 SessionRequirementsResponse fields
-    unit: "token",
+    lane: s.lane,
+    unit: s.unit,
+    provider: pricing.provider ?? "builtin",
     pricePerUnit: String(s.pricePerEvent),
     refundPolicy: "signed-receipt",
     ledger: {
@@ -418,7 +504,7 @@ app.post("/session/:id/topup", async (c) => {
   const pay = paymentContext(c);
   if (!pay) return c.json({ error: "no verified payment" }, 402);
 
-  const res = s.credit(pay.key, CONFIG.topUpTinybar);
+  const res = s.credit(pay.key, lanePricing(s.lane).topUpTinybar);
   saveSession(s);
   return c.json({
     sessionId: s.id,
@@ -447,7 +533,9 @@ app.get("/session/:id/stream", (c) => {
     const jobCode = c.req.query("code") ? Buffer.from(c.req.query("code"), "base64").toString("utf8") : undefined;
     for await (const ev of provider.stream({
       n, prompt: c.req.query("prompt"),
-      lane: c.req.query("lane"), code: jobCode, sessionId: s.id,
+      // Lane comes from the SESSION, never the request — otherwise a caller
+      // could pay cpu-small prices and run on a GPU.
+      lane: s.lane, code: jobCode, sessionId: s.id,
     })) {
       if (!s.burn(ev.id)) {
         await stream.writeSSE({
