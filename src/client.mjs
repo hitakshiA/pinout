@@ -107,6 +107,12 @@ export class PinoutClient {
     if (out.sessionSecret) this.secrets.set(out.sessionId, out.sessionSecret);
     return out;
   }
+  /** Rent a machine on a priced lane. The lane is committed in the 402. */
+  async openComputeSession(lane = "cpu-small") {
+    const out = this.#withSettlement(await this.pay(`/compute/${lane}`));
+    if (out.sessionSecret) this.secrets.set(out.sessionId, out.sessionSecret);
+    return out;
+  }
   async topUp(sessionId) {
     return this.#withSettlement(
       await this.pay(`/session/${sessionId}/topup`, { headers: this.#auth(sessionId) })

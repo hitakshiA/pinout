@@ -32,16 +32,29 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
 
   const open_session = tool({
     name: "open_session",
-    description: "Open a prepaid streaming session. Pays a real x402 micropayment in HBAR on Hedera and returns credits plus the settlement transaction.",
-    inputSchema: z.object({}),
-    execute: async () => {
-      const s = await client.openSession();
+    description:
+      "Open a prepaid session by paying a real x402 micropayment in HBAR. " +
+      "Pass a compute lane (see discover) to rent a MACHINE billed per second — " +
+      "that is what run_compute needs. Omit lane for a token-billed data stream.",
+    inputSchema: z.object({
+      lane: z.string().optional()
+        .describe("compute lane e.g. cpu-small. Omit for token-billed streaming."),
+    }),
+    execute: async (a) => {
+      // A compute lane is a different priced route; the lane is committed in
+      // the 402 the buyer signs, so it cannot be chosen later.
+      const s = a.lane
+        ? await client.openComputeSession(a.lane)
+        : await client.openSession();
       received.set(s.sessionId, []);
       return {
-        sessionId: s.sessionId, credits: s.credits, unit: s.unit,
-        pricePerEventTinybar: s.pricePerEventTinybar,
+        sessionId: s.sessionId, lane: s.lane ?? "token", unit: s.unit,
+        credits: s.credits ?? s.secondsPurchased,
+        pricePerUnitTinybar: s.pricePerSecondTinybar ?? s.pricePerEventTinybar,
+        provider: s.provider,
         maxSessionDurationSeconds: s.maxSessionDurationSeconds,
         paymentTx: s.paymentTx, settledOnChain: s.settledOnChain,
+        ...(a.lane ? { next: "call run_compute with this sessionId and your Python code" } : {}),
       };
     },
   });
@@ -119,27 +132,28 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
   const run_compute = tool({
     name: "run_compute",
     description:
-      "Rent a real machine and run Python code on it. You are billed per SECOND the " +
-      "machine is held, from credits you bought with open_session. The machine is " +
-      "released as soon as your code finishes and you are refunded for seconds you " +
-      "did not use. Print your answer to stdout. Requires an open sessionId.",
+      "Run Python on the machine you rented. REQUIRES a session opened with a " +
+      "compute lane (open_session({lane:'cpu-small'})) — a token-billed session " +
+      "cannot run code. You are billed per SECOND the machine is held; it is " +
+      "released the moment your code finishes and unused seconds are refunded. " +
+      "Print your answer to stdout.",
     inputSchema: z.object({
       sessionId: z.string(),
       code: z.string().describe("Python 3 source. Print results to stdout."),
-      lane: z.enum(["cpu-small", "cpu-4", "gpu-t4", "local"]).optional()
-        .describe("cpu-small is the default and is plenty for most work"),
       maxSeconds: z.number().optional().describe("hard ceiling on seconds held, default 120"),
     }),
     execute: async (a) => {
       const q = new URLSearchParams({
         n: String(a.maxSeconds ?? 120), provider: "compute",
-        lane: a.lane ?? "cpu-small",
         code: Buffer.from(a.code, "utf8").toString("base64"),
       });
       const secret = client.secrets.get(a.sessionId);
       const res = await fetch(`${base}/session/${a.sessionId}/stream?${q}`,
         { headers: secret ? { Authorization: `Bearer ${secret}` } : {} });
-      if (!res.ok) return { error: `stream ${res.status}`, detail: await res.text() };
+      if (!res.ok) {
+        return { error: `stream ${res.status}`, detail: (await res.text()).slice(0, 300),
+                 hint: "if this session was not opened with a compute lane, open a new one: open_session({lane:'cpu-small'})" };
+      }
 
       const reader = res.body.getReader(); const dec = new TextDecoder();
       let buf = "", ev = null, seconds = 0, coldStartMs = null;
