@@ -6,3 +6,4 @@ sessions.jsonl
 last-session.json
 *.log
 .DS_Store
+.venv

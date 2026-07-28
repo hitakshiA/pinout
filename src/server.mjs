@@ -444,7 +444,11 @@ app.get("/session/:id/stream", (c) => {
 
   return streamSSE(c, async (stream) => {
     let sent = 0;
-    for await (const ev of provider.stream({ n, prompt: c.req.query("prompt") })) {
+    const jobCode = c.req.query("code") ? Buffer.from(c.req.query("code"), "base64").toString("utf8") : undefined;
+    for await (const ev of provider.stream({
+      n, prompt: c.req.query("prompt"),
+      lane: c.req.query("lane"), code: jobCode, sessionId: s.id,
+    })) {
       if (!s.burn(ev.id)) {
         await stream.writeSSE({
           event: "SessionTerminate",
