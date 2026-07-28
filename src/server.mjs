@@ -32,6 +32,7 @@ import {
 } from "./session.mjs";
 import { getProvider } from "../providers/index.mjs";
 import { RATES } from "../providers/compute.mjs";
+import { admit, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
 
@@ -366,6 +367,21 @@ app.use("/session/:id/*", async (c, next) => {
   await next();
 });
 
+// Admission control runs BEFORE the payment gate. Refusing after taking money
+// would be worse than refusing at all.
+app.use("/compute/:lane", async (c, next) => {
+  const lane = c.req.param("lane");
+  if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}`, lanes: Object.keys(LANES) }, 404);
+  const active = [...sessions.values()].filter((s) => s.state !== "CLOSED");
+  const refusal = admit({
+    lane,
+    activeSessions: active.length,
+    activeGpu: active.filter((s) => RATES.lanes[s.lane]?.gpu).length,
+  });
+  if (refusal) return c.json(refusal, refusal.status);
+  await next();
+});
+
 app.use("*", paymentMiddleware(routes, resourceServer));
 
 // Discovery: the bazaar extension declares the shape, this endpoint makes it
@@ -374,6 +390,20 @@ app.get("/bazaar", (c) => c.json(bazaarCatalog()));
 
 // Machine-readable lane catalogue. An agent must be able to find the compute
 // capability from HTTP alone — a black-box consumer previously could not.
+app.get("/health", (c) => {
+  const active = [...sessions.values()].filter((x) => x.state !== "CLOSED");
+  return c.json({
+    ok: true,
+    uptimeSeconds: Math.floor(process.uptime()),
+    activeSessions: active.length,
+    activeGpuSessions: active.filter((x) => RATES.lanes[x.lane]?.gpu).length,
+    limits: LIMITS,
+    providerSpend: spendReport(),
+    feePayer: FEE_PAYER,
+    facilitator: CONFIG.facilitator,
+  });
+});
+
 app.get("/lanes", (c) => c.json({
   unit: "second",
   note: "You are billed per second you HOLD the machine, from credits bought with POST /session?lane=<lane>. Unused seconds are refunded at close.",
@@ -525,7 +555,13 @@ app.get("/session/:id/stream", (c) => {
   // overlap, which the verifier would (correctly) reject as non-contiguous.
   if (s._streaming) return c.json({ error: "session already streaming" }, 409);
   s._streaming = true;
-  const n = Number(c.req.query("n") ?? 500);
+  let n = Number(c.req.query("n") ?? 500);
+  // Hard ceiling regardless of credits held. A buyer with a large balance must
+  // not be able to pin a GPU for an hour.
+  if (s.unit === "second") {
+    const cap = maxSecondsFor(s.lane);
+    if (n > cap) n = cap;
+  }
   const provider = getProvider(c.req.query("provider") ?? env.PROVIDER ?? "llm");
 
   return streamSSE(c, async (stream) => {
@@ -587,6 +623,9 @@ app.post("/session/:id/close", async (c) => {
     burnTopic: env.BURN_TOPIC_ID, burnFinalSeq: out.settlement.body.burnFinalSeq,
     settlementTopic: env.TOPIC_ID, settlementTxOnTopic: out.settlement.txId,
   });
+  if (s.unit === "second") {
+    try { recordSpend(lanePricing(s.lane).provider, s.burned, s.lane); } catch { /* non-fatal */ }
+  }
   saveSession(s);
   return c.json({
     receipt,
@@ -632,6 +671,15 @@ export async function start(port = Number(env.PORT ?? 4021)) {
     restored++;
   }
   if (restored) console.log(`restored        : ${restored} open session(s) from disk`);
+
+  // Kill any sandbox we left behind. An orphan bills per second in silence and
+  // is the most expensive class of bug in this system.
+  try {
+    const reaped = await reapOrphans();
+    if (reaped.daytona || reaped.modal) {
+      console.log(`orphans reaped  : ${reaped.daytona} daytona, ${reaped.modal} modal`);
+    }
+  } catch (e) { console.error("orphan reap failed:", e.message); }
 
   // Reap abandoned sessions. Without this a buyer that pays and walks away
   // loses its money permanently — the service keeps funds for undelivered

@@ -7,3 +7,4 @@ last-session.json
 *.log
 .DS_Store
 .venv
+.compute-spend.json
