@@ -9,9 +9,9 @@
 set -euo pipefail
 
 RG="${RG:-pinout-rg}"
-LOC="${LOC:-eastus}"
+LOC="${LOC:-eastus2}"
 VM="${VM:-pinout-vm}"
-SIZE="${SIZE:-Standard_B2s}"          # 2 vCPU / 4 GiB — ample; the heavy work is remote
+SIZE="${SIZE:-Standard_D2alds_v7}"   # B-series is capacity-restricted on this subscription in eastus/westus2/centralus
 PORT="${PORT:-4021}"
 ADMIN="${ADMIN:-pinout}"
 
