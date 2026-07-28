@@ -223,8 +223,11 @@ async function doSettle(ctx, s, cause) {
       .freezeWith(ctx.client).sign(ctx.key)).execute(ctx.client);
     const st = (await resp.getReceipt(ctx.client)).status.toString();
     if (st !== "SUCCESS") throw new Error(`refund failed: ${st}`);
+    // getReceipt above already confirms consensus finality. Polling the mirror
+    // node here added 15-30s to every close and pushed the response past the
+    // default HTTP client timeout, so a correct settlement looked like a
+    // failure to the caller.
     refund = { txId: resp.transactionId.toString(), tinybar: unused };
-    await awaitTx(refund.txId);
     s.refund = refund;
   }
 

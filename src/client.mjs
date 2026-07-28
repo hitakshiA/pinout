@@ -26,7 +26,8 @@ export class PinoutClient {
     this.maxPerCall = maxPerCallTinybar;
     this.budget = budgetTinybar;
     this.spent = 0;
-    this.secrets = new Map(); // sessionId -> bearer secret, issued once at mint
+    this.secrets = new Map();    // sessionId -> bearer secret, issued once at mint
+    this.thresholds = new Map(); // sessionId -> remaining units at which to top up
     const key = PrivateKey.fromStringECDSA(
       (privateKey ?? env.HEDERA_PRIVATE_KEY).replace(/^0x/, "")
     );
@@ -111,6 +112,7 @@ export class PinoutClient {
   async openComputeSession(lane = "cpu-small") {
     const out = this.#withSettlement(await this.pay(`/compute/${lane}`));
     if (out.sessionSecret) this.secrets.set(out.sessionId, out.sessionSecret);
+    if (out.topUpAtSecondsRemaining) this.thresholds.set(out.sessionId, out.topUpAtSecondsRemaining);
     return out;
   }
   async topUp(sessionId) {
@@ -118,10 +120,15 @@ export class PinoutClient {
       await this.pay(`/session/${sessionId}/topup`, { headers: this.#auth(sessionId) })
     );
   }
-  async close(sessionId, cause) {
+  /**
+   * Close writes an on-chain settlement anchor and then a refund, so it is
+   * legitimately slower than a normal request. The default fetch timeout is
+   * too short for it.
+   */
+  async close(sessionId, cause, { timeoutMs = 120000 } = {}) {
     const r = await fetch(
       `${this.base}/session/${sessionId}/close${cause ? `?cause=${cause}` : ""}`,
-      { method: "POST", headers: this.#auth(sessionId) }
+      { method: "POST", headers: this.#auth(sessionId), signal: AbortSignal.timeout(timeoutMs) }
     );
     return r.json();
   }
@@ -171,7 +178,11 @@ export class PinoutClient {
             if (event === "data") { received.push(data.id); onEvent?.(data); }
             else if (event === "Checkpoint") onCheckpoint?.(data);
             else if (event === "SessionUpdate") {
-              if (data.remainingUnits <= 0 || data.remainingUnits < 400) await onLow?.(data);
+              // The server tells us where the line is (topUpAtSecondsRemaining);
+              // a hardcoded 400 fires immediately on a 120-second session and
+              // never fires on a large one.
+              const line = this.thresholds.get(sessionId) ?? 400;
+              if (data.remainingUnits <= line) await onLow?.(data);
             } else if (event === "SessionTerminate") terminated = data;
           }
         }

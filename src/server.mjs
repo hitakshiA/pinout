@@ -116,6 +116,24 @@ function paymentContext(c) {
  * fixed at session open so the 402 can be priced honestly and the signed offer
  * commits to it.
  */
+/**
+ * Session-shaped tunings. A compute session buys ~120 seconds while a token
+ * session buys thousands of events, so a fixed threshold of 400 marks every
+ * compute session "low" from second zero, and a 250-unit checkpoint interval
+ * means a 120s job never checkpoints until it closes.
+ */
+export function tuningFor(unit, credits) {
+  if (unit === "second") {
+    return {
+      // top up with ~25% left, floor of 10s so there is time to settle a payment
+      topUpThreshold: Math.max(10, Math.floor(credits * 0.25)),
+      // ~4 checkpoints across a session, floor of 15s to keep HCS cost sane
+      checkpointEvery: Math.max(15, Math.floor(credits / 4)),
+    };
+  }
+  return { topUpThreshold: CONFIG.topUpThreshold, checkpointEvery: CONFIG.checkpointEvery };
+}
+
 export function lanePricing(lane) {
   if (!lane || lane === "llm" || lane === "mirror") {
     return { lane: lane ?? "llm", unit: "token",
@@ -458,9 +476,11 @@ app.post("/compute/:lane", async (c) => {
   if (!pay) return c.json({ error: "no verified payment" }, 402);
   const pricing = lanePricing(lane);
 
+  const seconds = Math.floor(pricing.sessionTinybar / pricing.pricePerUnit);
+  const tune = tuningFor("second", seconds);
   const s = new Session({
     payer: pay.payer, pricePerEvent: pricing.pricePerUnit,
-    checkpointEvery: CONFIG.checkpointEvery, topUpThreshold: CONFIG.topUpThreshold,
+    checkpointEvery: tune.checkpointEvery, topUpThreshold: tune.topUpThreshold,
     maxDurationMs: CONFIG.maxDurationMs,
   });
   s.lane = lane; s.unit = "second";
@@ -473,6 +493,8 @@ app.post("/compute/:lane", async (c) => {
     lane, provider: pricing.provider ?? "builtin", unit: "second",
     credits: res.credited, secondsPurchased: res.credited,
     pricePerSecondTinybar: pricing.pricePerUnit,
+    topUpAtSecondsRemaining: tune.topUpThreshold,
+    checkpointEverySeconds: tune.checkpointEvery,
     maxSessionDurationSeconds: Math.floor(s.maxDurationMs / 1000),
     howToRun: `GET /session/${s.id}/stream?provider=compute&n=<maxSeconds>&code=<base64 python>  with Authorization: Bearer <sessionSecret>`,
   });
