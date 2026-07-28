@@ -8,3 +8,4 @@ last-session.json
 .DS_Store
 .venv
 .compute-spend.json
+.agent-sessions/

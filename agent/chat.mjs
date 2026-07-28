@@ -7,11 +7,12 @@
 //   node agent/chat.mjs                          interactive
 //   node agent/chat.mjs -p "one-shot task"       headless
 //   node agent/chat.mjs --resume <id> -p "..."   continue a conversation
-import { OpenRouter, serverTool } from "@openrouter/agent";
+import { OpenRouter } from "@openrouter/agent";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
+import { pathToFileURL } from "node:url";
 import { env, ROOT } from "../src/config.mjs";
 import { generalTools } from "./general-tools.mjs";
 import { pinoutTools } from "./tools.mjs";
@@ -46,9 +47,11 @@ export function saveState(id, messages) {
 export function allTools({ withCompute = true } = {}) {
   const tools = [...generalTools(), ...hederaTools()];
   if (withCompute) tools.push(...pinoutTools());
-  // Server-side tools: OpenRouter executes these, no client code required.
-  tools.push(serverTool("openrouter:web_search"), serverTool("openrouter:web_fetch"),
-             serverTool("openrouter:datetime"));
+  // OpenRouter server tools are deliberately NOT included. Every variant tested
+  // (web_search, web_fetch, datetime) fails request schema validation, and one
+  // bad tool invalidates the WHOLE request with an opaque invalid_union that
+  // names no culprit — so a single unusable tool silently breaks every call.
+  // The http_request tool covers fetching without that risk.
   return tools;
 }
 
@@ -96,7 +99,9 @@ export class Chat {
 }
 
 /* ------------------------------------------------------------------ cli ---- */
-if (import.meta.url === `file://${process.argv[1]}`) {
+// NB: a naive `file://${argv[1]}` fails on any path containing a space —
+// this repo lives under "Dev Projects" and the CLI silently did nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const argv = process.argv.slice(2);
   const flag = (f) => { const i = argv.indexOf(f); return i > -1 ? argv[i + 1] : null; };
   const id = flag("--resume") ?? randomUUID().slice(0, 8);
