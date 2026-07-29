@@ -23,6 +23,7 @@
   },
   "scripts": {
     "e2e": "node scripts/e2e.mjs",
+    "compute-e2e": "node scripts/compute-e2e.mjs",
     "verify": "node scripts/verify.mjs",
     "bench": "node scripts/bench-hcs.mjs",
     "mcp": "node src/mcp.mjs",

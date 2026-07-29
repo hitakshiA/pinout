@@ -519,7 +519,18 @@ app.get("/health", async (c) => {
 
 app.get("/lanes", (c) => c.json({
   unit: "second",
-  note: "You are billed per second you HOLD the machine, from credits bought with POST /session?lane=<lane>. Unused seconds are refunded at close.",
+  // POST /session?lane= was removed: it let a caller pay the flat /session price
+  // and be credited at a lane's rate. Telling people to use it is worse than
+  // useless — they get a 400 and no idea why.
+  note: "Billed per second you HOLD the machine. Buy seconds with POST /compute/<lane>, " +
+        "which commits the lane's price inside the 402 you sign. Unused seconds are refunded at close.",
+  howTo: {
+    buy: "POST /compute/<lane>",
+    oneShot: "GET /session/<id>/stream?provider=compute&n=<maxSeconds>&code=<base64>",
+    rent: "GET /session/<id>/stream?provider=compute&hold=1&n=<maxSeconds>, then POST /session/<id>/exec",
+    topUp: "POST /topup/<lane>/<id>",
+    release: "POST /session/<id>/close",
+  },
   lanes: Object.entries(RATES.lanes).map(([lane, v]) => ({
     lane, provider: v.provider, tinybarPerSecond: v.creditTinybar,
     vcpu: v.vcpu, memGiB: v.memGiB, gpu: v.gpu ?? null,
