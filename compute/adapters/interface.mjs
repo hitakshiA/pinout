@@ -1,11 +1,11 @@
 /**
- * ComputeAdapter — one interface, three implementations (local, modal, daytona).
+ * ComputeAdapter: one interface, one implementation per fleet.
  *
  * The tick loop NEVER awaits the adapter's stream. It drains a buffer the
  * adapter fills. You are renting *time*, not output: a job that goes quiet must
  * still burn credits, and a chatty job must not burn faster.
  *
- * Daytona's docs warn that blocking synchronous callbacks in its log stream
+ * One fleet's SDK warns that blocking synchronous callbacks in its log stream
  * cause WebSocket disconnections, which is a second reason the tick and the
  * stream must not be coupled.
  */
@@ -38,4 +38,5 @@ export class ComputeAdapter {
  *
  * provision({ hold: true }) brings a machine up idle and keeps it up.
  */
-export const LANES = ["cpu-small", "cpu-4", "gpu-t4", "gpu-a100-80"];
+export const LANES = ["cpu-1", "cpu-2", "cpu-4", "gpu-t4", "gpu-l4", "gpu-a10",
+  "gpu-l40s", "gpu-a100-80", "gpu-h200", "gpu-b200", "gpu-b300"];

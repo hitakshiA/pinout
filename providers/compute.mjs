@@ -7,8 +7,8 @@
 //
 // The tick is driven by a timer, NOT by the job's output. You are renting time,
 // not output: a silent job still burns, a chatty job does not burn faster. This
-// also satisfies Daytona's constraint that its log callback must never block.
-import { adapterFor } from "../compute/adapters/index.mjs";
+// also satisfies a fleet SDK constraint that its log callback must never block.
+import { adapterFor, fleetAdapter } from "../compute/adapters/index.mjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, env } from "../src/config.mjs";
@@ -35,9 +35,9 @@ export const compute = {
    */
   async *stream({ n = 120, lane = "local", code, sessionId, onBalance, hold = false } = {}) {
     const spec = lane === "local"
-      ? { provider: "local" }
+      ? { fleet: "local" }
       : laneSpec(lane);
-    const adapter = adapterFor(spec.provider);
+    const adapter = fleetAdapter(spec.fleet);
 
     const buffer = [];
     let handle = null, coldStartMs = 0, provisionError = null;
@@ -52,16 +52,16 @@ export const compute = {
         image: spec.image,
         vcpu: spec.vcpu, memGiB: spec.memGiB, memMiB: (spec.memGiB ?? 8) * 1024,
         // Pass the GPU spec THROUGH. Stripping at the first dash turned the
-        // lane's "A100-40GB" into a bare "A100", which Modal resolves to the
+        // lane's "A100-40GB" into a bare "A100", which resolves upstream to the
         // 80GB part — so the gpu-a100-40 lane could never provision the card it
         // is named and priced for, and a buyer got different hardware than the
-        // lane it paid for. Modal accepts the qualified names directly.
+        // lane it paid for. The qualified names are accepted directly.
         gpu: spec.gpu ? String(spec.gpu) : undefined,
         timeoutSeconds: n + 60,
       });
       handle = p.handle;
       coldStartMs = p.coldStartMs ?? 0;
-      // Callback only pushes. Any work here would block Daytona's WebSocket.
+      // Callback only pushes. Any work here would block the fleet's WebSocket.
       await adapter.attachStream(handle, (line) => buffer.push(line));
     } catch (e) {
       provisionError = e;
@@ -71,9 +71,9 @@ export const compute = {
       // This used to be a plain event, so the server BILLED a second for a
       // machine that was never provisioned, and put the reason in a `stderr`
       // field nothing reads — the buyer was charged for an invisible failure.
-      console.error(`provision failed (lane ${lane}, provider ${spec.provider}):`, provisionError);
+      console.error(`provision failed (lane ${lane}, fleet ${spec.fleet}):`, provisionError);
       yield {
-        id: "err-0", i: 0, unit: "second", lane, provider: spec.provider,
+        id: "err-0", i: 0, unit: "second", lane, fleet: spec.fleet,
         provisionFailed: true, billed: false, stdout: "",
         error: provisionError.message,
         note: "the machine was never provisioned, so nothing was billed",
@@ -131,7 +131,7 @@ export const compute = {
               pausedAt = Date.now();
               lastWaitAt = pausedAt;
               yield { id: `pause-${emitted}`, i: emitted, unit: "second", lane,
-                      provider: spec.provider, paused: true, billed: false,
+                      fleet: spec.fleet, paused: true, billed: false,
                       graceSeconds: Math.floor(graceMs / 1000),
                       stdout: "", note: "credits exhausted — machine held, not billing. Top up to continue." };
             }
@@ -139,7 +139,7 @@ export const compute = {
               lastWaitAt = Date.now();
               const left = Math.max(0, Math.ceil((graceMs - (Date.now() - pausedAt)) / 1000));
               yield { id: `wait-${emitted}-${left}`, i: emitted, unit: "second", lane,
-                      provider: spec.provider, waiting: true, billed: false, stdout: "",
+                      fleet: spec.fleet, waiting: true, billed: false, stdout: "",
                       graceSecondsRemaining: left,
                       note: `awaiting top-up — ${left}s of grace left before the machine is released` };
             }
@@ -147,7 +147,7 @@ export const compute = {
               // Tell the client WHY the stream is ending. Silently closing the
               // socket looks identical to a network failure.
               yield { id: `exhausted-${emitted}`, i: emitted, unit: "second", lane,
-                      provider: spec.provider, exhausted: true, billed: false, stdout: "",
+                      fleet: spec.fleet, exhausted: true, billed: false, stdout: "",
                       note: `no top-up within ${Math.floor(graceMs / 1000)}s — machine released` };
               break;
             }
@@ -160,7 +160,7 @@ export const compute = {
             meterStart += Date.now() - pausedAt;
             pausedAt = null;
             yield { id: `resume-${emitted}`, i: emitted, unit: "second", lane,
-                    provider: spec.provider, resumed: true, billed: false,
+                    fleet: spec.fleet, resumed: true, billed: false,
                     stdout: "", note: "topped up — same machine, job never stopped." };
           }
 
@@ -172,7 +172,7 @@ export const compute = {
               i: emitted,
               unit: "second",
               lane,
-              provider: spec.provider,
+              fleet: spec.fleet,
               elapsedMs: Date.now() - meterStart,
               coldStartMs: emitted === 0 ? coldStartMs : undefined,
               stdout: out.length ? out.join("\n") : "",
@@ -184,7 +184,7 @@ export const compute = {
         if (buffer.length) {
           const out = buffer.splice(0, buffer.length);
           yield { id: `sec-${emitted}`, i: emitted, unit: "second", lane,
-                  provider: spec.provider, elapsedMs: Date.now() - meterStart,
+                  fleet: spec.fleet, elapsedMs: Date.now() - meterStart,
                   stdout: out.join("\n"), trailing: true };
         }
       } finally {

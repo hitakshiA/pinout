@@ -42,7 +42,11 @@ function load() {
 function save(s) { writeFileSync(LEDGER, JSON.stringify(s, null, 2)); }
 
 /** Record real provider spend so the ceiling survives restarts. */
-export function recordSpend(provider, seconds, lane) {
+/** Lane fleet to the budget bucket it draws on. */
+export const FLEET_BUDGET = { cpu: "daytona", accel: "modal" };
+
+export function recordSpend(fleet, seconds, lane) {
+  const provider = FLEET_BUDGET[fleet] ?? fleet;
   if (!provider || provider === "builtin" || provider === "local") return load();
   const l = RATES.lanes[lane];
   const usd = (l?.providerCostPerSecUsd ?? 0) * seconds;
@@ -51,6 +55,22 @@ export function recordSpend(provider, seconds, lane) {
   s.sessions = (s.sessions ?? 0) + 1;
   save(s);
   return s;
+}
+
+/**
+ * Public capacity view. spendReport() names our upstream suppliers and states
+ * their remaining balances, which is operator information: it tells a stranger
+ * how much of our budget is left to exhaust. Callers get whether each class of
+ * hardware is currently sellable, and nothing else.
+ */
+export function capacitySummary() {
+  const r = spendReport();
+  const state = (p) => (r[p] && r[p].remainingUsd > 0 ? "available" : "exhausted");
+  return {
+    cpuLanes: state("daytona"),
+    gpuLanes: LIMITS.allowGpu ? state("modal") : "disabled",
+    sessionsServed: r.sessionsServed,
+  };
 }
 
 export function spendReport() {
@@ -129,11 +149,11 @@ export function admit({ lane, activeSessions, activeGpu, codeBytes }) {
   if (codeBytes && codeBytes > LIMITS.maxCodeBytes) {
     return { status: 413, error: `code exceeds ${LIMITS.maxCodeBytes} bytes` };
   }
-  if (spec?.provider) {
-    const r = spendReport()[spec.provider];
+  if (spec?.fleet) {
+    const r = spendReport()[FLEET_BUDGET[spec.fleet]];
     if (r && r.remainingUsd <= 0) {
       return { status: 503,
-        error: `${spec.provider} budget exhausted`,
+        error: `${spec.fleet === "accel" ? "gpu" : "cpu"} capacity budget exhausted`,
         detail: `spent $${r.spentUsd} of $${r.usableUsd} usable` +
                 (r.reservedUsd ? ` ($${r.reservedUsd} held in reserve)` : "") };
     }

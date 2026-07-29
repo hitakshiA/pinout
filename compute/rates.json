@@ -1,67 +1,161 @@
 {
-  "_note": "1 credit = 1 second of compute held. Costs are ALL-IN: accelerator + vCPU + RAM.",
+  "_note": "1 credit = 1 second of compute held. Costs are ALL-IN: accelerator + vCPU + RAM (+ disk on CPU lanes).",
   "_hbarUsd": 0.068801,
   "_hbarUsdSource": "resolve live from mirror node /api/v1/network/exchangerate; this is a snapshot",
-  "_providerRatesVerified": {
-    "daytona": "vCPU $0.000014/s, RAM $0.0000045/GiB/s, disk $0.00000003/GiB/s (5GB free)",
-    "modal": "SANDBOX rates: CPU $0.00003942/core/s, RAM $0.00000667/GiB/s (~3x standard task rates)"
-  },
-  "_budget": {
-    "daytona": 200,
-    "modal": 30
-  },
+  "_pricing": "every lane = (all-in cost per second) x 1.1, rounded to 1000 tinybar",
+  "_hardwareVerified": "each accelerator lane was provisioned and the device read back from the machine (name, VRAM, SM count, compute capability)",
   "lanes": {
-    "cpu-small": {
-      "provider": "daytona",
+    "cpu-1": {
+      "fleet": "cpu",
       "vcpu": 1,
       "memGiB": 1,
-      "diskGiB": 3,
+      "diskGiB": 3.2,
       "providerCostPerSecUsd": 1.85e-05,
       "creditTinybar": 30000,
       "marginPct": 10,
       "_costVerified": true
     },
+    "cpu-2": {
+      "fleet": "cpu",
+      "vcpu": 2,
+      "memGiB": 4,
+      "diskGiB": 3.2,
+      "providerCostPerSecUsd": 4.6e-05,
+      "creditTinybar": 74000,
+      "marginPct": 10,
+      "_costVerified": true
+    },
     "cpu-4": {
-      "provider": "daytona",
+      "fleet": "cpu",
       "vcpu": 4,
       "memGiB": 8,
-      "diskGiB": 10,
-      "providerCostPerSecUsd": 9.2e-05,
+      "diskGiB": 3.2,
+      "providerCostPerSecUsd": 9.215e-05,
       "creditTinybar": 147000,
       "marginPct": 10,
       "_costVerified": true
     },
     "gpu-t4": {
-      "provider": "modal",
+      "fleet": "accel",
       "gpu": "T4",
       "vcpu": 2,
       "memGiB": 8,
-      "providerCostPerSecUsd": 0.00025678,
-      "creditTinybar": 411000,
+      "vramGiB": 15.6,
+      "sms": 40,
+      "computeCapability": "7.5",
+      "device": "Tesla T4",
+      "providerCostPerSecUsd": 0.0002962,
+      "creditTinybar": 474000,
       "marginPct": 10,
       "_costVerified": true,
-      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
-      "_imageNote": "torch+CUDA preinstalled; a bare python image made this lane unusable for ML"
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
     },
-    "gpu-a100-80": {
-      "provider": "modal",
-      "gpu": "A100-80GB",
+    "gpu-l4": {
+      "fleet": "accel",
+      "gpu": "L4",
       "vcpu": 4,
       "memGiB": 16,
-      "providerCostPerSecUsd": 0.00095884,
-      "creditTinybar": 1533000,
+      "vramGiB": 23.7,
+      "sms": 58,
+      "computeCapability": "8.9",
+      "device": "NVIDIA L4",
+      "providerCostPerSecUsd": 0.0004864,
+      "creditTinybar": 778000,
       "marginPct": 10,
-      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
-      "_costVerified": false,
-      "_costBasis": "Modal published A100-80GB $2.50/hr + verified sandbox CPU/RAM rates; Modal's billing API is Team-tier only so this is derived, not measured",
-      "_hardwareNote": "was 'gpu-a100-40'. Modal returns an 80GB A100 for both 'A100' and 'A100-40GB' on this account, so the 40GB lane advertised and priced a card it could not deliver. Renamed to what actually provisions."
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
+    },
+    "gpu-a10": {
+      "fleet": "accel",
+      "gpu": "A10",
+      "vcpu": 4,
+      "memGiB": 16,
+      "vramGiB": 23.7,
+      "sms": 72,
+      "computeCapability": "8.6",
+      "device": "NVIDIA A10",
+      "providerCostPerSecUsd": 0.0005704,
+      "creditTinybar": 912000,
+      "marginPct": 10,
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
+    },
+    "gpu-l40s": {
+      "fleet": "accel",
+      "gpu": "L40S",
+      "vcpu": 8,
+      "memGiB": 32,
+      "vramGiB": 47.7,
+      "sms": 142,
+      "computeCapability": "8.9",
+      "device": "NVIDIA L40S",
+      "providerCostPerSecUsd": 0.0010708,
+      "creditTinybar": 1712000,
+      "marginPct": 10,
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
+    },
+    "gpu-a100-80": {
+      "fleet": "accel",
+      "gpu": "A100-80GB",
+      "vcpu": 8,
+      "memGiB": 64,
+      "vramGiB": 85.1,
+      "sms": 108,
+      "computeCapability": "8.0",
+      "device": "NVIDIA A100-SXM4-80GB",
+      "providerCostPerSecUsd": 0.00143624,
+      "creditTinybar": 2296000,
+      "marginPct": 10,
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
+    },
+    "gpu-h200": {
+      "fleet": "accel",
+      "gpu": "H200",
+      "vcpu": 12,
+      "memGiB": 96,
+      "vramGiB": 150.1,
+      "sms": 132,
+      "computeCapability": "9.0",
+      "device": "NVIDIA H200",
+      "providerCostPerSecUsd": 0.00237436,
+      "creditTinybar": 3796000,
+      "marginPct": 10,
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
+    },
+    "gpu-b200": {
+      "fleet": "accel",
+      "gpu": "B200",
+      "vcpu": 16,
+      "memGiB": 128,
+      "vramGiB": 191.5,
+      "sms": 148,
+      "computeCapability": "10.0",
+      "device": "NVIDIA B200",
+      "providerCostPerSecUsd": 0.00322048,
+      "creditTinybar": 5149000,
+      "marginPct": 10,
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
+    },
+    "gpu-b300": {
+      "fleet": "accel",
+      "gpu": "B300",
+      "vcpu": 16,
+      "memGiB": 192,
+      "vramGiB": 287.4,
+      "sms": 148,
+      "computeCapability": "10.3",
+      "device": "NVIDIA B300 SXM6 AC",
+      "providerCostPerSecUsd": 0.00388336,
+      "creditTinybar": 6209000,
+      "marginPct": 10,
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime"
     }
   },
-  "_laneSplit": "Daytona = CPU only (no GPU on this plan). Modal = GPU only.",
-  "_gpuBudget": {
-    "totalUsd": 30,
-    "t4RunwayHours": 32.5,
-    "a100RunwayHours": 10.8,
-    "_note": "GPU is the scarce resource and is NOT replenishable within the build. Every test run, rehearsal and cold-agent audit that touches a GPU lane spends it. Default everything to local or CPU."
-  }
+  "_fleets": "cpu = pooled CPU fleet; accel = accelerator fleet. Which upstream capacity each maps to is an operational detail resolved at runtime.",
+  "_diskNote": "CPU lanes deliver 3.2 GiB usable disk regardless of the requested size; measured, not requested."
 }

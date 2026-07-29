@@ -9,3 +9,10 @@ last-session.json
 .venv
 .compute-spend.json
 .agent-sessions/
+
+# Internal engineering record: measurements, build plan, supplier probes.
+# Kept out of the public repo, not deleted.
+.private/
+
+# scratch scripts written during investigation, never part of the project
+.*.mjs

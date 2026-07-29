@@ -32,7 +32,7 @@ import {
 } from "./session.mjs";
 import { getProvider, PROVIDERS } from "../providers/index.mjs";
 import { RATES, jobResult, execOnMachine, putFile, getFile, lsFiles } from "../providers/compute.mjs";
-import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS, ANCHOR_COST_TINYBAR } from "../compute/guards.mjs";
+import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, capacitySummary, reapOrphans, LIMITS, ANCHOR_COST_TINYBAR } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
 
@@ -182,7 +182,7 @@ export function lanePricing(lane) {
   if (!l) throw new Error(`unknown lane ${lane}`);
   const pricePerUnit = l.creditTinybar;
   // Default budget = 120 seconds of that lane, rounded to a whole tinybar.
-  return { lane, unit: "second", pricePerUnit, provider: l.provider,
+  return { lane, unit: "second", pricePerUnit, fleet: l.fleet,
            sessionTinybar: pricePerUnit * 120, topUpTinybar: pricePerUnit * 60 };
 }
 
@@ -509,7 +509,7 @@ app.get("/health", async (c) => {
     activeSessions: active.length,
     activeGpuSessions: active.filter((x) => RATES.lanes[x.lane]?.gpu).length,
     limits: LIMITS,
-    providerSpend: spendReport(),
+    capacity: capacitySummary(),
     pendingAnchors: pendingAnchor.length,
     sellerSolvency: await sellerSolvency([...sessions.values()].filter((x) => x.state !== "CLOSED").length),
     feePayer: FEE_PAYER,
@@ -532,10 +532,23 @@ app.get("/lanes", (c) => c.json({
     release: "POST /session/<id>/close",
   },
   lanes: Object.entries(RATES.lanes).map(([lane, v]) => ({
-    lane, provider: v.provider, tinybarPerSecond: v.creditTinybar,
-    vcpu: v.vcpu, memGiB: v.memGiB, gpu: v.gpu ?? null,
+    // The upstream supplier is deliberately not in the public shape. What a
+    // buyer needs is the hardware and the price; who we source it from is a
+    // procurement detail, and naming it invites callers to depend on it.
+    lane,
+    accelerator: v.device ?? null,
+    vramGiB: v.vramGiB ?? null,
+    streamingMultiprocessors: v.sms ?? null,
+    computeCapability: v.computeCapability ?? null,
+    vcpu: v.vcpu, memGiB: v.memGiB, diskGiB: v.diskGiB ?? null,
+    tinybarPerSecond: v.creditTinybar,
+    hbarPerHour: Number((v.creditTinybar * 3600 / 1e8).toFixed(3)),
+    sessionSeconds: 120,
     sessionTinybar: v.creditTinybar * 120,
-  })).concat([{ lane: "local", provider: "builtin", tinybarPerSecond: 1000, sessionTinybar: 300000 }]),
+    maxSecondsPerSession: v.gpu ? LIMITS.maxSecondsPerSessionGpu : LIMITS.maxSecondsPerSessionCpu,
+    buy: `POST /compute/${lane}`,
+  })).concat([{ lane: "local", vcpu: 1, memGiB: 1, tinybarPerSecond: 1000,
+                sessionTinybar: 300000, note: "in-process, for tests" }]),
 }));
 app.get("/.well-known/x402", (c) => c.json(bazaarCatalog()));
 
@@ -566,7 +579,7 @@ app.get("/", (c) => c.json({
       "all session calls need: Authorization: Bearer <sessionSecret>",
     ],
     lanes: Object.fromEntries(Object.entries(RATES.lanes).map(([k, v]) => [k, {
-      provider: v.provider, tinybarPerSecond: v.creditTinybar,
+      tinybarPerSecond: v.creditTinybar,
       vcpu: v.vcpu, memGiB: v.memGiB, gpu: v.gpu ?? null,
     }])),
   },
@@ -598,7 +611,7 @@ app.post("/compute/:lane", async (c) => {
 
   return c.json({
     sessionId: s.id, sessionSecret: s.secret,
-    lane, provider: pricing.provider ?? "builtin", unit: "second",
+    lane, unit: "second",
     credits: res.credited, secondsPurchased: res.credited,
     pricePerSecondTinybar: pricing.pricePerUnit,
     topUpAtSecondsRemaining: tune.topUpThreshold,
@@ -660,7 +673,6 @@ app.post("/session", async (c) => {
     // #2273 SessionRequirementsResponse fields
     lane: s.lane,
     unit: s.unit,
-    provider: pricing.provider ?? "builtin",
     pricePerUnit: String(s.pricePerEvent),
     refundPolicy: "signed-receipt",
     ledger: {
@@ -1018,11 +1030,11 @@ app.post("/session/:id/close", async (c) => {
     // seconds the buyer was billed. The two differ by cold start (measured at
     // 101s on a first image pull) and by any paused grace window — both real
     // provider cost that the seller pays and the buyer does not. Recording only
-    // billed seconds made the guard protecting the Modal balance understate
+    // billed seconds made the guard protecting the accelerator balance understate
     // spend, which is the wrong direction for a ceiling on real money.
     try {
       const held = jobResult(s.id)?.terminated?.seconds;
-      recordSpend(lanePricing(s.lane).provider,
+      recordSpend(lanePricing(s.lane).fleet,
                   Number.isFinite(held) ? Math.ceil(held) : s.burned, s.lane);
     } catch { /* non-fatal */ }
   }
@@ -1094,8 +1106,9 @@ export async function start(port = Number(env.PORT ?? 4021)) {
   // is the most expensive class of bug in this system.
   try {
     const reaped = await reapOrphans();
-    if (reaped.daytona || reaped.modal) {
-      console.log(`orphans reaped  : ${reaped.daytona} daytona, ${reaped.modal} modal`);
+    const reapedTotal = (reaped.daytona ?? 0) + (reaped.modal ?? 0);
+    if (reapedTotal) {
+      console.log(`orphans reaped  : ${reapedTotal} sandbox(es)`);
     }
   } catch (e) { console.error("orphan reap failed:", e.message); }
 

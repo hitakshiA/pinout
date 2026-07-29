@@ -9,28 +9,30 @@
 [![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
 
-CPU and GPU machines, billed per second held. One payment buys seconds. Running out
-pauses the machine instead of killing it, so a top up resumes the same process where it
-stopped. Unused seconds are refunded on chain, and **anyone can recompute the bill from
-the public ledger**.
+CPU boxes and NVIDIA accelerators from a T4 up to a B300, billed per second held.
+One payment buys seconds. Running out pauses the machine instead of killing it, so a
+top up resumes the same process where it stopped. Unused seconds are refunded on chain,
+and **anyone can recompute the bill from the public ledger**.
 
 </div>
 
 ```js
-const m = await client.rent("gpu-t4");            // pays over x402, machine comes up
+const m = await client.rent("gpu-b200");           // pays over x402, machine comes up
 await m.upload("/work/train.csv", data);
-await m.exec("import torch; ...");                 // state persists between calls
-const model = await m.download("/work/model.pt");  // sha256 checked in transit
-await m.release();                                 // unused seconds refunded on chain
+await m.exec("import torch; ...");                  // state persists between calls
+const model = await m.download("/work/model.pt");   // sha256 checked in transit
+await m.release();                                  // unused seconds refunded on chain
 ```
 
 ---
 
 ## Table of contents
 
-- [What you can rent](#what-you-can-rent)
+- [Hardware and pricing](#hardware-and-pricing)
+- [What a machine can do](#what-a-machine-can-do)
 - [Two shapes of work](#two-shapes-of-work)
 - [Running out mid job](#running-out-mid-job)
+- [For AI agents](#for-ai-agents)
 - [Why this needs a new payment primitive](#why-this-needs-a-new-payment-primitive)
 - [How the meter works](#how-the-meter-works)
 - [The two tier ledger](#the-two-tier-ledger)
@@ -38,7 +40,6 @@ await m.release();                                 // unused seconds refunded on
 - [Guards](#guards)
 - [Quickstart](#quickstart)
 - [API](#api)
-- [For AI agents](#for-ai-agents)
 - [Token streams, the other workload](#token-streams-the-other-workload)
 - [Why Hedera](#why-hedera)
 - [Configuration](#configuration)
@@ -46,24 +47,84 @@ await m.release();                                 // unused seconds refunded on
 
 ---
 
-## What you can rent
+## Hardware and pricing
 
-Real hardware from **Daytona** (CPU) and **Modal** (GPU). One credit is one second held.
+One credit is one second held. Every line below was verified by provisioning the lane
+and reading the device back off the machine itself, so the catalogue cannot advertise
+silicon it is unable to deliver.
 
-| Lane | Hardware | Provider | Price | 120 s session |
-|---|---|---|---:|---:|
-| `cpu-small` | 1 vCPU, 1 GiB | Daytona | 30,000 tinybar/s | 0.036 ℏ |
-| `cpu-4` | 4 vCPU, 8 GiB | Daytona | 147,000 tinybar/s | 0.176 ℏ |
-| `gpu-t4` | Tesla T4, 16 GiB | Modal | 411,000 tinybar/s | 0.493 ℏ |
-| `gpu-a100-80` | A100 80 GB | Modal | 1,533,000 tinybar/s | 1.840 ℏ |
+### Accelerator lanes
 
-Each lane's price is committed **inside the 402 the buyer signs**, and the lane is read
-from the *session*, never from the request, so a caller cannot pay `cpu-small` prices and
-ask for a GPU.
+| Lane | Accelerator | VRAM | SMs | Compute cap. | vCPU | RAM | tinybar/s | ℏ/hour |
+|---|---|---:|---:|:--:|---:|---:|---:|---:|
+| `gpu-t4` | Tesla T4 | 15.6 GB | 40 | 7.5 | 2 | 8 GiB | 474,000 | 17.06 |
+| `gpu-l4` | NVIDIA L4 | 23.7 GB | 58 | 8.9 | 4 | 16 GiB | 778,000 | 28.01 |
+| `gpu-a10` | NVIDIA A10 | 23.7 GB | 72 | 8.6 | 4 | 16 GiB | 912,000 | 32.83 |
+| `gpu-l40s` | NVIDIA L40S | 47.7 GB | 142 | 8.9 | 8 | 32 GiB | 1,712,000 | 61.63 |
+| `gpu-a100-80` | A100 SXM4 | 85.1 GB | 108 | 8.0 | 8 | 64 GiB | 2,296,000 | 82.66 |
+| `gpu-h200` | NVIDIA H200 | 150.1 GB | 132 | 9.0 | 12 | 96 GiB | 3,796,000 | 136.66 |
+| `gpu-b200` | NVIDIA B200 | 191.5 GB | 148 | 10.0 | 16 | 128 GiB | 5,149,000 | 185.36 |
+| `gpu-b300` | NVIDIA B300 SXM6 | 287.4 GB | 148 | 10.3 | 16 | 192 GiB | 6,209,000 | 223.52 |
 
-Measured on real machines: 4.15 TFLOP/s fp32 on the T4, 123.8 TFLOP/s tf32 on the A100,
-4 million rows through pandas on `cpu-4` with parquet written to disk and read back.
-Full numbers in [docs/measurements.md](./docs/measurements.md).
+### CPU lanes
+
+| Lane | vCPU | RAM | Disk | tinybar/s | ℏ/hour |
+|---|---:|---:|---:|---:|---:|
+| `cpu-1` | 1 | 1 GiB | 3.2 GiB | 30,000 | 1.08 |
+| `cpu-2` | 2 | 4 GiB | 3.2 GiB | 74,000 | 2.66 |
+| `cpu-4` | 4 | 8 GiB | 3.2 GiB | 147,000 | 5.29 |
+
+### How the price is set
+
+Every lane uses one formula, so the arithmetic is checkable rather than asserted:
+
+```
+price per second = (accelerator + vCPU + RAM + disk cost) x 1.10
+```
+
+rounded to the nearest 1,000 tinybar. The 10% is the entire margin. `compute/rates.json`
+carries the underlying cost of every lane, so you can divide and check.
+
+A session buys **120 seconds** by default and tops up from there. Session cost is simply
+`tinybarPerSecond x 120`, and anything unused comes back at close.
+
+Live and machine readable, including per lane maximum session length:
+
+```bash
+curl <host>/lanes
+```
+
+> [!NOTE]
+> An H100 lane is not listed. It failed to provision on the one occasion it was tried,
+> and nothing is advertised here that has not been seen to work. A 40 GB A100 lane is
+> not listed either: the same request returned a 40 GB card on one occasion and an 80 GB
+> card on another, so it cannot be promised as a distinct guarantee. The 80 GB lane has
+> been consistent across every attempt.
+
+---
+
+## What a machine can do
+
+A lane gives you a real Linux container, not a sandboxed expression evaluator.
+
+| | |
+|---|---|
+| **Runtime** | Python 3.11, CUDA 12.1 and PyTorch 2.4.1 preinstalled on accelerator lanes |
+| **Packages** | `pip install` works. Package index and Hugging Face are reachable |
+| **Disk** | Read and write anywhere, 3.2 GiB usable on CPU lanes. Files persist for the life of the rental |
+| **Files in** | Upload up to 32 MiB per file, binary safe |
+| **Files out** | Download any file, checked against its sha256 in transit |
+| **Processes** | Full `subprocess`, shell commands, background work |
+| **State** | The filesystem persists between `exec` calls in one rental |
+| **Session length** | Up to 900 s on CPU lanes, 300 s on accelerator lanes, extendable by topping up |
+| **Code size** | 64 KiB per `exec` call, or stage larger payloads as a file |
+
+Two limits worth knowing before you plan a job. Outbound network is filtered rather than
+open, so a job that fetches its own input should be tested rather than assumed.
+`os.cpu_count()` reports the host's core count, not your lane's quota, so size thread
+pools from the lane you bought rather than from what Python reports. The quota itself is
+real: a parallel benchmark scores 4.14x higher on `cpu-4` than on `cpu-1`, matching the
+4x vCPU ratio you pay for.
 
 ---
 
@@ -91,11 +152,11 @@ flowchart TB
 the moment it exits, and you are billed only for the seconds it actually ran.
 
 **Rental** holds an idle machine so you can work on it. Run code, look at the result,
-decide what to do next, put files on it, take artifacts off it. The filesystem persists
-between steps. This is what makes the service usable by an agent, which works by looking
-at what happened and choosing the next step.
+decide what to do next, put files on it, take artifacts off it. This is what makes the
+service usable by an agent, which works by looking at what happened and choosing the
+next step.
 
-Verified on both providers: upload 14,580 B, exec reads it and writes state, a *separate*
+Verified on both fleets: upload 14,580 B, exec reads it and writes state, a *separate*
 exec reads that state back, download a 1 MB artifact with its sha256 checked in transit,
 exit codes propagated, money balancing exactly.
 
@@ -123,6 +184,90 @@ Measured on the live deployment: a 150 second job on a 120 second session paused
 124 s, was billed **zero** for 10 s of pause, resumed at **step 120, the step it stopped
 on, in the same still running process**, and finished. 180 credits bought, 141 billed,
 39 refunded, and the on chain verifier passed all five checks.
+
+---
+
+## For AI agents
+
+Every agent surface is gated on confirmed on chain payment. **No tool returns data before
+its payment settles.**
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `rent_machine` | Take a machine and hold it. Returns a session id |
+| `exec` | Run Python on it. Filesystem persists between calls |
+| `upload_file` | Put a file on it, text or base64 |
+| `download_file` | Take a file off it, sha256 checked |
+| `list_files` | List a directory |
+| `release_machine` | Give it back, stop the meter, get refunded |
+| `run_compute` | One-shot: submit a script, get output, machine released |
+| `top_up` | Buy more seconds without losing the machine |
+| `verify_session` | Recompute your own bill from the public ledger |
+| `spend_report` | What you have spent and what budget is left |
+| `discover` | Find lanes and prices without being told them |
+
+### How an agent should use this
+
+```
+rent_machine({lane: "gpu-l4"})     pick from /lanes by VRAM and price, not by guessing
+upload_file(...)                   give it the inputs
+exec(...)                          look at the result, decide the next step
+download_file(...)                 take the artifact before you release
+release_machine(...)               ALWAYS. the meter runs until you do
+```
+
+Three things worth telling an agent explicitly:
+
+1. **Release the machine.** The meter runs until it does. Everything on the filesystem is
+   gone afterwards, so download first.
+2. **Thinking time is billed.** Seconds spent deciding the next step cost the same as
+   seconds spent computing. Plan the work before renting, and prefer `run_compute` when
+   the job is a single known script.
+3. **Pick the lane deliberately.** A `gpu-b300` costs 207x a `cpu-1` per second. Read
+   `/lanes` and choose on VRAM and price.
+
+Spend guards (`maxPerCallTinybar`, `budgetTinybar`) reject a challenge **before any
+signature exists**, so a mispriced or injected 402 can never put funds at risk.
+
+### MCP server
+
+```bash
+npm run mcp
+```
+
+### Hedera Agent Kit v4 plugin
+
+```js
+import { ToolDiscovery } from "@hashgraph/hedera-agent-kit";
+import { pinoutPlugin } from "pinout/agent-kit";
+
+const tools = new ToolDiscovery([pinoutPlugin]).getAllTools(context);
+```
+
+Tools extend `BaseTool`, so they participate in v4's **hooks and policies**. Spend limits,
+HCS audit hooks and human in the loop confirmation apply automatically, which is exactly
+what you want on a payments plugin.
+
+> [!TIP]
+> In Agent Kit, a tool's `method` is its **unique registry key**, not an HTTP verb.
+> Setting it to `"post"` or `"get"` collides with core tools and the kit silently drops
+> yours with `Plugin tool "post" conflicts with core tool`.
+
+### Conversational agent
+
+```bash
+node agent/chat.mjs                       # interactive
+node agent/chat.mjs -p "rent a GPU and…"  # headless
+```
+
+> Given only a URL and a private key, and forbidden from reading this source, an
+> independent agent worked out the protocol from the HTTP responses alone and paid. Its
+> balance moved by exactly the purchase amount and not one tinybar more. A second agent,
+> given no hints, rented a machine, uploaded a dataset, aggregated it, read that result
+> back **in a separate step**, downloaded the verdict and released. 86 seconds billed,
+> 34 refunded, summing exactly to the 120 bought.
 
 ---
 
@@ -159,7 +304,7 @@ sequenceDiagram
     participant F as x402 facilitator
     participant H as Hedera
 
-    C->>S: POST /compute/gpu-t4
+    C->>S: POST /compute/gpu-b200
     S-->>C: 402 + PAYMENT-REQUIRED<br/>(signed offer, price, feePayer)
     C->>C: sign bare TransferTransaction
     C->>S: retry + PAYMENT-SIGNATURE
@@ -310,13 +455,13 @@ testnet**. Payment alone cannot be what stands between a stranger and a real GPU
 Admission is decided *before* the 402 is issued, on the principle that you never quote a
 price for work you will not do:
 
-- concurrency caps, sessions and GPU sessions counted separately
+- concurrency caps, sessions and accelerator sessions counted separately
 - per lane wall clock ceilings
-- provider budget ceilings, charged in seconds **held** rather than seconds billed, with a
-  GPU reserve held back
+- capacity budget ceilings, charged in seconds **held** rather than seconds billed, with
+  an accelerator reserve held back
 - **seller solvency**, refusing new sessions when the seller could not afford a settlement
   anchor for every open session, rather than risk stranding a prepaid balance
-- an orphan reaper across **both** providers
+- an orphan reaper across every fleet, because a forgotten accelerator bills in silence
 
 ---
 
@@ -352,8 +497,8 @@ npm run verify -- <sessionId>   # recompute the bill from the mirror node
 
 | Method | Route | Paid | Purpose |
 |---|---|:--:|---|
-| `POST` | `/compute/<lane>` | ✅ | Buy seconds on a compute lane. Price committed in the 402 |
-| `POST` | `/topup/<lane>/<id>` | ✅ | Add seconds to a compute session |
+| `POST` | `/compute/<lane>` | ✅ | Buy seconds on a lane. Price committed in the 402 |
+| `POST` | `/topup/<lane>/<id>` | ✅ | Add seconds without losing the machine |
 | `POST` | `/session` | ✅ | Open a token billed session |
 | `POST` | `/session/<id>/topup` | ✅ | Add credits to a token session |
 
@@ -380,64 +525,10 @@ would otherwise be free compute.
 
 | Method | Route | Purpose |
 |---|---|---|
+| `GET` | `/lanes` | Every lane, its hardware, its price, and how to buy it |
+| `GET` | `/health` | Liveness, capacity, whether each class of lane is sellable |
 | `GET` | `/` | Service descriptor, live pricing, topic links |
-| `GET` | `/lanes` | Lanes, prices, and how to buy each |
-| `GET` | `/health` | Liveness, capacity, provider budget remaining |
 | `GET` | `/bazaar`, `/.well-known/x402` | x402 catalog for agents |
-
----
-
-## For AI agents
-
-Every agent surface is gated on confirmed on chain payment. **No tool returns data before
-its payment settles.**
-
-### Tools
-
-`rent_machine` · `exec` · `upload_file` · `download_file` · `list_files` ·
-`release_machine` · `run_compute` · `open_session` · `top_up` · `stream` ·
-`close_session` · `verify_session` · `spend_report` · `discover`
-
-Spend guards (`maxPerCallTinybar`, `budgetTinybar`) reject a challenge **before any
-signature exists**, so a mispriced or injected 402 can never put funds at risk.
-
-### MCP server
-
-```bash
-npm run mcp
-```
-
-### Hedera Agent Kit v4 plugin
-
-```js
-import { ToolDiscovery } from "@hashgraph/hedera-agent-kit";
-import { pinoutPlugin } from "pinout/agent-kit";
-
-const tools = new ToolDiscovery([pinoutPlugin]).getAllTools(context);
-```
-
-Tools extend `BaseTool`, so they participate in v4's **hooks and policies**. Spend limits,
-HCS audit hooks and human in the loop confirmation apply automatically, which is exactly
-what you want on a payments plugin.
-
-> [!TIP]
-> In Agent Kit, a tool's `method` is its **unique registry key**, not an HTTP verb.
-> Setting it to `"post"` or `"get"` collides with core tools and the kit silently drops
-> yours with `Plugin tool "post" conflicts with core tool`.
-
-### Conversational agent
-
-```bash
-node agent/chat.mjs                       # interactive
-node agent/chat.mjs -p "rent a GPU and…"  # headless
-```
-
-> Given only a URL and a private key, and forbidden from reading this source, an
-> independent agent worked out the protocol from the HTTP responses alone and paid. Its
-> balance moved by exactly the purchase amount and not one tinybar more. A second agent,
-> given no hints, rented a machine, uploaded a dataset, aggregated it, read that result
-> back **in a separate step**, downloaded the verdict and released. 86 seconds billed,
-> 34 refunded, summing exactly to the 120 bought.
 
 ---
 
@@ -463,9 +554,6 @@ npm run e2e
 | **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
 | **Free mirror node** | Public, unauthenticated, no signup, so verification costs the buyer nothing. |
 
-Full measured numbers, methodology, and the bugs found along the way:
-**[docs/measurements.md](./docs/measurements.md)**
-
 ---
 
 ## Configuration
@@ -476,8 +564,7 @@ Full measured numbers, methodology, and the bugs found along the way:
 | `SELLER_ACCOUNT_ID`, `SELLER_PRIVATE_KEY` | | Seller. Owns both topics |
 | `BURN_TOPIC_ID` | | Tier 1, plain HCS |
 | `TOPIC_ID` | | Tier 2, HIP-991 |
-| `DAYTONA_API_KEY`, `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` | | Compute providers |
-| `ALLOW_GPU` | `false` | GPU lanes are off unless explicitly enabled |
+| `ALLOW_GPU` | `false` | Accelerator lanes are off unless explicitly enabled |
 | `MAX_CONCURRENT_SESSIONS`, `MAX_CONCURRENT_GPU` | `8`, `1` | Capacity caps |
 | `MAX_SECONDS_CPU`, `MAX_SECONDS_GPU` | `900`, `300` | Wall clock ceiling per session |
 | `EXHAUSTION_GRACE_MS` | `90000` | How long a machine is held, unbilled, awaiting top up |
@@ -508,8 +595,7 @@ Full measured numbers, methodology, and the bugs found along the way:
 [`@x402/hono`](https://www.npmjs.com/package/@x402/hono) ·
 [`@hiero-ledger/sdk`](https://www.npmjs.com/package/@hiero-ledger/sdk) ·
 [`@hashgraph/hedera-agent-kit`](https://www.npmjs.com/package/@hashgraph/hedera-agent-kit) ·
-[`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk) ·
-[Daytona](https://daytona.io) · [Modal](https://modal.com)
+[`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk)
 
 Implements the x402 [`metered-session`](https://github.com/x402-foundation/x402/issues/2273),
 [`offer-and-receipt`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/extension-offer-and-receipt.md)
@@ -519,24 +605,25 @@ Implements the x402 [`metered-session`](https://github.com/x402-foundation/x402/
 
 ## Status and known limits
 
-Working end to end on Hedera testnet, deployed on Azure, exercised against real Daytona
-and Modal machines. Stated plainly:
+Working end to end on Hedera testnet, deployed on Azure, exercised against real machines.
+Stated plainly:
 
 - **Testnet only.**
 - **Unit economics do not close at demo scale.** A settlement anchor costs ~0.73 HBAR
-  while a `cpu-small` session sells for 0.036 HBAR. Batching amortises it, with break even
+  while a `cpu-1` session sells for 0.036 HBAR. Batching amortises it, with break even
   around 2,450 billed seconds per anchor, but the seller subsidises small and abandoned
-  sessions today. The numbers are in [`compute/PLAN.md` §10](./compute/PLAN.md), not
-  hidden.
+  sessions today.
 - **Cold start is absorbed by the seller.** The buyer's meter starts after provisioning. A
-  first pull of a 3 GB GPU image measured 101,176 ms. Once Modal has it cached, 187 ms.
-  Pre warm before opening a GPU lane publicly.
+  first pull of a 3 GB accelerator image measured 101,176 ms. Once cached, 187 ms. Pre
+  warm before opening an accelerator lane publicly.
 - **You pay for thinking time when renting.** An agent deliberating between steps is
   billed for those seconds. `run_compute` is cheaper for a single known script.
-- **Sandbox egress is filtered.** pypi and huggingface are reachable, CloudFront is reset.
-  `os.cpu_count()` reports the host's cores, not the lane's quota.
-- **The `gpu-a100-80` cost basis is derived, not measured.** Modal's billing API is Team
-  tier only, so it is arithmetic on published rates and is marked `_costVerified: false`.
+- **Outbound network is filtered**, so a job that fetches its own input should be tested
+  rather than assumed. `os.cpu_count()` reports the host's cores, not the lane's quota.
+- **Accelerator capacity is not guaranteed.** Lanes are sold from a shared fleet. An H100
+  lane is not offered because it failed the one time it was tried, and a 40 GB A100 lane
+  is not offered because the same request returned different silicon on different
+  occasions.
 - Sessions are single node and held in memory, persisted to an append only log. A crash
   loses at most `CHECKPOINT_EVERY` units, and **the loss falls on the seller**.
 - Facilitator equivalence rests on one trial each, not a load test.

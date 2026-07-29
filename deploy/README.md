@@ -16,7 +16,7 @@ installs Node 20, uploads the source (secrets excluded), copies `.env`
 separately, and runs the server under systemd with `Restart=always`.
 
 The VM is deliberately small. It only brokers payments and meters. All heavy
-compute runs on Daytona and Modal, so the host needs no CPU or GPU of its own.
+compute runs on the sandbox fleet, so the host needs no CPU or GPU of its own.
 
 ## Live deployment
 
@@ -49,4 +49,4 @@ friction** on testnet. A public deployment that runs arbitrary code needs one of
 - an allowlist of payer accounts, or
 - hard provider spend caps plus egress and wall-clock limits
 
-See `PUBLIC_RELEASE.md`.
+See the deployment checklist kept with the operator notes.

@@ -422,6 +422,14 @@ export class ModalAdapter extends ComputeAdapter {
 const ADAPTERS = { local: LocalAdapter, daytona: DaytonaAdapter, modal: ModalAdapter };
 const cache = new Map();
 
+/**
+ * Lanes name a FLEET, not a supplier. Which upstream capacity a fleet resolves
+ * to is an operational detail that belongs here, not in the rate card and not
+ * in anything a buyer reads.
+ */
+const FLEET = { cpu: "daytona", accel: "modal", local: "local" };
+export function fleetAdapter(fleet) { return adapterFor(FLEET[fleet] ?? fleet); }
+
 export function adapterFor(provider) {
   const C = ADAPTERS[provider];
   if (!C) throw new Error(`unknown provider ${provider}; have ${Object.keys(ADAPTERS)}`);
