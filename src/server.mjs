@@ -330,6 +330,17 @@ function bazaarCatalog() {
   const items = [];
   for (const [pattern, cfg] of Object.entries(routes)) {
     const [method, path] = pattern.split(" ");
+
+    // The catalogue must not advertise what the handler refuses to sell.
+    //
+    // `local` runs in-process on this host and is not isolated compute, so
+    // POST /compute/local returns 404. The route config still existed though,
+    // and this catalogue is generated from route config, so /bazaar kept
+    // listing it at 300,000 tinybar. An agent did exactly what the bazaar is
+    // for: it read the catalogue, found the cheapest thing on it, and asked to
+    // be funded for a lane that cannot be bought. Twice.
+    if (/\/(compute|topup)\/local(\/|$)/.test(path)) continue;
+
     for (const a of cfg.accepts) {
       const price = typeof a.price === "function" ? a.price({}) : a.price;
       items.push({
