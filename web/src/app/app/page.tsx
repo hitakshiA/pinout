@@ -228,15 +228,20 @@ export default function Workspace() {
         break;
       }
       case "tool_settled": {
-        const name = String(ev.name ?? "");
+        // Settle the oldest still-pending call, not one matched by name.
+        //
+        // The name is not on this event: it arrived as "?" every time, so
+        // matching by name settled nothing and every tool line stayed in the
+        // present tense for the life of the run. Results come back in the
+        // order the calls were made, so position is the reliable key and the
+        // name was never needed.
         setBlocks((b) => {
           const copy = [...b];
-          for (let i = copy.length - 1; i >= 0; i--) {
+          for (let i = 0; i < copy.length; i++) {
             const blk = copy[i];
             if (blk.k !== "agent") continue;
-            const k = [...blk.tools].reverse().findIndex((m) => m.name === name && !m.done);
-            if (k === -1) continue;
-            const at = blk.tools.length - 1 - k;
+            const at = blk.tools.findIndex((m) => !m.done);
+            if (at === -1) continue;
             const tools = [...blk.tools];
             tools[at] = { ...tools[at], done: true, ok: ev.ok !== false };
             copy[i] = { ...blk, tools };
