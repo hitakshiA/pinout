@@ -489,7 +489,11 @@ export async function applyFunding(workspaceId, { funderAccountId, expectTinybar
 
   if (!w.wallet) {
     const acct = await createWorkspaceAccount({ funderAccountId, initialTinybar: expectTinybar });
-    ws.update(workspaceId, { wallet: acct, funder: funderAccountId });
+    ws.update(workspaceId, {
+      wallet: acct, funder: funderAccountId,
+      // marked spent so a later top-up cannot be "confirmed" by this deposit
+      fundingTxIds: [acct.openingTxId, acct.openingTxMirrorId].filter(Boolean),
+    });
     run?.fundingArrived({
       accountId: acct.accountId, tinybar: acct.fundedTinybar, opened: true,
       requestedTinybar: acct.requestedTinybar,
@@ -499,8 +503,11 @@ export async function applyFunding(workspaceId, { funderAccountId, expectTinybar
 
   const seen = await confirmFunding({
     accountId: w.wallet.accountId, funderAccountId, expectTinybar,
+    // every deposit is spent once; the account-opening transfer is already spent
+    consumedTxIds: w.fundingTxIds ?? [],
   });
   if (!seen.ok) return { pending: true };
+  ws.update(workspaceId, { fundingTxIds: [...(w.fundingTxIds ?? []), seen.txId] });
   run?.fundingArrived({ accountId: w.wallet.accountId, tinybar: seen.amount, txId: seen.txId });
   return { accountId: w.wallet.accountId, txId: seen.txId, tinybar: seen.amount };
 }

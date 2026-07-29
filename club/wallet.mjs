@@ -55,15 +55,22 @@ export async function createWorkspaceAccount({ funderAccountId, initialTinybar }
   const client = operator();
   try {
     const key = PrivateKey.generateECDSA();
-    const receipt = await (await new AccountCreateTransaction()
+    const resp = await new AccountCreateTransaction()
       .setKeyWithoutAlias(key.publicKey)
       .setInitialBalance(Hbar.fromTinybars(funded))
       // the account cannot outlive the workspace unnoticed
       .setAccountMemo(`pinout.club workspace, returns to ${funderAccountId}`)
-      .execute(client)).getReceipt(client);
+      .execute(client);
+    const receipt = await resp.getReceipt(client);
 
     return {
       accountId: receipt.accountId.toString(),
+      // kept so a later top-up cannot be "confirmed" by the deposit that
+      // opened the account. The mirror node formats it differently, so both
+      // spellings are recorded.
+      openingTxId: resp.transactionId.toString(),
+      openingTxMirrorId: resp.transactionId.toString()
+        .replace("@", "-").replace(/\.(\d+)$/, "-$1"),
       privateKey: key.toStringDer(),
       publicKey: key.publicKey.toStringDer(),
       boundFunder: funderAccountId,
@@ -81,10 +88,19 @@ export async function createWorkspaceAccount({ funderAccountId, initialTinybar }
  * Confirm the funder actually sent what they claim, from the mirror node
  * rather than from the browser's word for it.
  */
-export async function confirmFunding({ accountId, funderAccountId, expectTinybar }) {
+export async function confirmFunding({ accountId, funderAccountId, expectTinybar, consumedTxIds = [] }) {
+  // `consumed` is what stops one deposit paying for two requests.
+  //
+  // Without it this scans recent history and returns the first transfer big
+  // enough, which is the transfer that opened the account. A top-up request
+  // was answered by the original deposit: the agent asked for 0.4410 HBAR,
+  // was told it had been funded 1.4220, and no new money moved at all. The
+  // agent then spent against credit it had already spent.
+  const seen = new Set(consumedTxIds);
   const res = await mirror(`/api/v1/transactions?account.id=${accountId}&limit=25&order=desc`);
   for (const tx of res.transactions ?? []) {
     if (tx.result !== "SUCCESS") continue;
+    if (seen.has(tx.transaction_id)) continue;
     const credit = (tx.transfers ?? []).find(
       (t) => t.account === accountId && Number(t.amount) > 0
     );

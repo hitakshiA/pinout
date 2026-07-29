@@ -86,8 +86,12 @@ export function pinoutTools({
     name: "open_session",
     description:
       "Open a prepaid session by paying a real x402 micropayment in HBAR. " +
-      "Pass a compute lane (see discover) to rent a MACHINE billed per second — " +
-      "that is what run_compute needs. Omit lane for a token-billed data stream.",
+      "Use this ONLY for a one-shot job you will run with run_compute, or " +
+      "(with no lane) for a token-billed data stream. " +
+      "If you want to run several commands, move files, and keep state between " +
+      "them, call rent_machine instead and do NOT call this first. Both hold a " +
+      "machine and count against capacity, so opening one of each for the same " +
+      "lane pays twice and can lock you out of the accelerator you just bought.",
     inputSchema: z.object({
       lane: z.string().optional()
         .describe("compute lane, e.g. cpu-1 or gpu-t4. Call discover for the real " +
@@ -239,7 +243,8 @@ function machineOr404(sessionId) {
       lane: z.string().optional().describe(
         "cpu-1, cpu-2, cpu-4, gpu-t4, gpu-l4, gpu-a10, gpu-l40s, gpu-a100-80, " +
         "gpu-h200, gpu-b200, gpu-b300. These are the only lanes that exist; " +
-        "call discover for prices. Default cpu-1"),
+        "call discover for prices. Default cpu-1. Rent ONE machine and reuse " +
+        "it; do not also call open_session for the same lane."),
       maxSeconds: z.number().optional().describe("hard ceiling on seconds held, default 300"),
     }),
     execute: async (a) => {
