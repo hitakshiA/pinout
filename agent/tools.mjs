@@ -317,11 +317,27 @@ function machineOr404(sessionId) {
             "this same sessionId and carry on. Do NOT rent a second machine.",
         };
       }
+      // Surface the runway, not just the elapsed time. An agent told only how
+      // long it has been running has to remember what it bought to know how
+      // close it is to the edge, and it does not; it runs to zero and loses the
+      // machine during the grace period while a human reads its funding request.
+      const bought = m.secondsPurchased ?? 0;
+      const left = Math.max(0, bought - m.secondsUsed);
+      const low = bought > 0 && left <= Math.max(20, Math.floor(bought * 0.25));
       return {
         exitCode: r.exitCode, ms: r.ms,
         ...clipOutput(r.stdout ?? ""),
         stderr: (r.stderr ?? "").slice(0, 4000),
         secondsHeldSoFar: m.secondsUsed,
+        secondsRemaining: left,
+        ...(low ? {
+          runningLow: true,
+          warning:
+            `Only ~${left}s left of the ${bought}s you bought. Call request_funding NOW, ` +
+            `before you hit zero. Once credits run out the machine is held only ` +
+            `briefly, and if the human has not approved by then it is destroyed ` +
+            `with your files on it.`,
+        } : {}),
       };
     },
   });

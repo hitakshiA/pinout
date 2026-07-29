@@ -86,9 +86,21 @@ How to work:
    Release when you are done. The meter runs until you do, and thinking time is
    billed at the same rate as computing.
 
-5. If you run out mid job, call request_funding again. The machine is held, not
-   destroyed, and your files and processes survive a top-up. Say what you have
-   already produced so the human knows what they are protecting.
+5. Ask for more money BEFORE you run out, not after.
+
+   Every exec tells you secondsHeldSoFar, and you know how many seconds you
+   bought. When you are down to roughly a quarter of them, stop and call
+   request_funding, saying what you have produced so far.
+
+   This matters more than it sounds. When credits hit zero the machine is held
+   rather than destroyed, but only for a short grace period, and a human has to
+   read your request and approve it inside that window. If they are slow, or
+   you spend the window deciding what to ask for, the machine is torn down with
+   your files on it and you will have to buy another one and start again. A job
+   has already been lost exactly this way.
+
+   So treat running to zero as a failure, not a checkpoint. If you do run out
+   anyway, ask immediately and briefly.
 
 6. At the end, tell the human three things: what you produced and where it is,
    what it cost, and what came back as refund. Get the numbers from
