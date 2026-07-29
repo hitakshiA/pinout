@@ -105,7 +105,14 @@ export const compute = {
                       graceSeconds: Math.floor(graceMs / 1000),
                       stdout: "", note: "credits exhausted — machine held, not billing. Top up to continue." };
             }
-            if (Date.now() - pausedAt > graceMs) break;   // grace expired
+            if (Date.now() - pausedAt > graceMs) {
+              // Tell the client WHY the stream is ending. Silently closing the
+              // socket looks identical to a network failure.
+              yield { id: `exhausted-${emitted}`, i: emitted, unit: "second", lane,
+                      provider: spec.provider, exhausted: true, billed: false, stdout: "",
+                      note: `no top-up within ${Math.floor(graceMs / 1000)}s — machine released` };
+              break;
+            }
             await new Promise((r) => setTimeout(r, 1000));
             continue;                                     // no tick, no billing
           }

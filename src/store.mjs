@@ -11,6 +11,13 @@ const FILE = join(ROOT, "sessions.jsonl");
 export function saveSession(s) {
   appendFileSync(FILE, JSON.stringify({
     id: s.id, payer: s.payer, state: s.state,
+    // The HASH of the bearer secret, never the secret itself. Without this a
+    // restart regenerates it and locks the buyer out of a session they paid
+    // for — their credits become unreachable.
+    secretHash: s.secretHash ? Buffer.from(s.secretHash).toString("base64") : null,
+    lane: s.lane, unit: s.unit,
+    checkpointEvery: s.checkpointEvery, topUpThreshold: s.topUpThreshold,
+    seenTxIds: [...(s.seenTxIds ?? [])],
     pricePerEvent: s.pricePerEvent, credits: s.credits, burned: s.burned,
     paidTinybar: s.paidTinybar, fundingTxIds: s.fundingTxIds,
     lastCheckpointAt: s.lastCheckpointAt,

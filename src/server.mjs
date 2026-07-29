@@ -30,7 +30,7 @@ import {
 import {
   Session, CAUSE, flushCheckpoint, settleSession, settleExpired, flushPendingAnchors, pendingAnchor, makeClient,
 } from "./session.mjs";
-import { getProvider } from "../providers/index.mjs";
+import { getProvider, PROVIDERS } from "../providers/index.mjs";
 import { RATES } from "../providers/compute.mjs";
 import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS, ANCHOR_COST_TINYBAR } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
@@ -717,14 +717,27 @@ app.get("/session/:id/stream", (c) => {
   // overlap, which the verifier would (correctly) reject as non-contiguous.
   if (s._streaming) return c.json({ error: "session already streaming" }, 409);
   s._streaming = true;
-  let n = Number(c.req.query("n") ?? 500);
+  // Validate before doing anything. Number("abc") is NaN and Number("-5") is
+  // negative; both previously produced a 200 that streamed nothing, so a client
+  // with a bad parameter got silence instead of an error.
+  const rawN = c.req.query("n");
+  let n = rawN === undefined ? 500 : Number(rawN);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+    return c.json({ error: "n must be a non-negative integer", got: rawN }, 400);
+  }
   // Hard ceiling regardless of credits held. A buyer with a large balance must
   // not be able to pin a GPU for an hour.
   if (s.unit === "second") {
     const cap = maxSecondsFor(s.lane);
     if (n > cap) n = cap;
   }
-  const provider = getProvider(c.req.query("provider") ?? env.PROVIDER ?? "llm");
+  let provider;
+  try {
+    provider = getProvider(c.req.query("provider") ?? env.PROVIDER ?? "llm");
+  } catch (e) {
+    // An unknown provider is the caller's mistake, not a server fault.
+    return c.json({ error: e.message, providers: Object.keys(PROVIDERS) }, 400);
+  }
 
   return streamSSE(c, async (stream) => {
     let sent = 0;
@@ -747,6 +760,12 @@ app.get("/session/:id/stream", (c) => {
       // Live credit balance so the provider can pause instead of dying.
       onBalance: () => s.credits,
     })) {
+      if (ev.exhausted) {
+        await stream.writeSSE({ event: "SessionTerminate", data: JSON.stringify({
+          type: "SessionTerminate", session: s.id, cause: CAUSE.BALANCE_EXHAUSTED,
+          note: ev.note, creditsRemaining: s.credits }) });
+        break;
+      }
       if (ev.paused || ev.resumed) {
         await stream.writeSSE({ event: ev.paused ? "SessionPaused" : "SessionResumed",
           data: JSON.stringify({ ...ev, credits: s.credits, sessionId: s.id }) });
@@ -863,11 +882,18 @@ export async function start(port = Number(env.PORT ?? 4021)) {
     if (r.state === "CLOSED") continue;
     const s = new Session({
       payer: r.payer, pricePerEvent: r.pricePerEvent,
-      checkpointEvery: CONFIG.checkpointEvery, topUpThreshold: CONFIG.topUpThreshold,
+      checkpointEvery: r.checkpointEvery ?? CONFIG.checkpointEvery,
+      topUpThreshold: r.topUpThreshold ?? CONFIG.topUpThreshold,
+      maxDurationMs: CONFIG.maxDurationMs,
     });
     s.id = r.id; s.state = r.state; s.credits = r.credits; s.burned = r.burned;
     s.paidTinybar = r.paidTinybar; s.fundingTxIds = r.fundingTxIds ?? [];
-    s.seenTxIds = new Set(s.fundingTxIds); // replay guard survives the restart
+    s.lane = r.lane; s.unit = r.unit;
+    // Restore the ORIGINAL bearer hash, or the buyer cannot reach the session
+    // it paid for. The plaintext secret was never stored and is not needed —
+    // authorise() compares hashes.
+    if (r.secretHash) s.secretHash = Buffer.from(r.secretHash, "base64");
+    s.seenTxIds = new Set(r.seenTxIds ?? r.fundingTxIds ?? []);
     s.lastCheckpointAt = r.lastCheckpointAt ?? 0;
     sessions.set(s.id, s);
     restored++;

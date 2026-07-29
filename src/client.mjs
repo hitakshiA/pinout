@@ -46,7 +46,20 @@ export class PinoutClient {
   async pay(path, { method = "POST", headers = {} } = {}) {
     const url = `${this.base}${path}`;
     const first = await fetch(url, { method, headers });
-    if (first.status !== 402) return { paid: false, res: first, body: await first.json() };
+    if (first.status !== 402) {
+      const body = await first.json().catch(() => ({}));
+      // A non-402, non-OK first response is a refusal (503 at capacity, 400 bad
+      // lane, 404 unknown). Returning it quietly made refusals look like
+      // successes to callers — a test of mine miscounted 3 refusals as opens.
+      if (!first.ok) {
+        const err = new Error(body.error ?? `request failed ${first.status}`);
+        err.status = first.status;
+        err.detail = body.detail;
+        err.body = body;
+        throw err;
+      }
+      return { paid: false, res: first, body };
+    }
 
     const header = first.headers.get("PAYMENT-REQUIRED");
     const challenge = header ? decodePaymentRequiredHeader(header) : await first.json();
