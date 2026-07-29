@@ -31,7 +31,7 @@ import {
   Session, CAUSE, flushCheckpoint, settleSession, settleExpired, flushPendingAnchors, pendingAnchor, makeClient,
 } from "./session.mjs";
 import { getProvider, PROVIDERS } from "../providers/index.mjs";
-import { RATES } from "../providers/compute.mjs";
+import { RATES, jobResult } from "../providers/compute.mjs";
 import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS, ANCHOR_COST_TINYBAR } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
@@ -899,7 +899,17 @@ app.post("/session/:id/close", async (c) => {
     settlementTopic: env.TOPIC_ID, settlementTxOnTopic: out.settlement?.txId ?? null,
   });
   if (s.unit === "second") {
-    try { recordSpend(lanePricing(s.lane).provider, s.burned, s.lane); } catch { /* non-fatal */ }
+    // Charge the budget ledger for seconds the machine was actually HELD, not
+    // seconds the buyer was billed. The two differ by cold start (measured at
+    // 101s on a first image pull) and by any paused grace window — both real
+    // provider cost that the seller pays and the buyer does not. Recording only
+    // billed seconds made the guard protecting the Modal balance understate
+    // spend, which is the wrong direction for a ceiling on real money.
+    try {
+      const held = jobResult(s.id)?.terminated?.seconds;
+      recordSpend(lanePricing(s.lane).provider,
+                  Number.isFinite(held) ? Math.ceil(held) : s.burned, s.lane);
+    } catch { /* non-fatal */ }
   }
   saveSession(s);
   return c.json({
