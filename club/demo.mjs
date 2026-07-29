@@ -71,6 +71,28 @@ const jsonOr = async (r, what) => {
   return b;
 };
 
+/**
+ * Close the workspace if this process is killed.
+ *
+ * A demo client dying does not close the session it opened: the server keeps
+ * holding the machine until the expiry sweep notices, and with one GPU slot
+ * that means the next run is refused for the next five minutes. Every
+ * interrupted run so far has cost the following one.
+ */
+function cleanupOn(wsId, cap) {
+  let done = false;
+  const bail = async () => {
+    if (done) return; done = true;
+    try {
+      await api(`/workspace/${wsId}/close`, { method: "POST", cap });
+      console.log(C.dim("\nclosed workspace on exit"));
+    } catch { /* going down anyway */ }
+    process.exit(130);
+  };
+  process.on("SIGINT", bail);
+  process.on("SIGTERM", bail);
+}
+
 async function main() {
   const n = arg("demo", "1");
   const demo = DEMOS[n];
@@ -84,6 +106,7 @@ async function main() {
       "create workspace");
   const wsId = workspace.id;
   console.log(C.dim(`workspace ${wsId.slice(0, 8)}`));
+  cleanupOn(wsId, cap);
 
   const chat = await jsonOr(
     await api(`/workspace/${wsId}/chats`, { method: "POST", cap, body: { title: demo.name } }),
