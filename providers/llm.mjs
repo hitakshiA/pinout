@@ -8,8 +8,12 @@
 import { createHash } from "node:crypto";
 import { env } from "../src/config.mjs";
 
-const CORPUS = `Hedera's x402 documentation lists a discrete per-request design as an explicit
-limitation: not streaming, not multi-hop routing. Prepaid metered sessions close that gap. A buyer
+// Source for the first sentence: https://docs.hedera.com/solutions/ai/x402
+// under "Requirements and limitations" — "Settlement is per-request and discrete.
+// x402 is not built for streaming payments or multi-hop routing across ledgers."
+const CORPUS = `Hedera's x402 documentation states under Requirements and limitations that settlement
+is per-request and discrete, and that x402 is not built for streaming payments or multi-hop routing
+across ledgers. Prepaid metered sessions close that gap. A buyer
 pays once through a standard exact-scheme cycle, receives credits, and consumes events until the
 balance runs low, at which point the client tops up without dropping the connection. Consumption is
 checkpointed to a consensus topic so the bill can be recomputed by anyone from the public mirror

@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![x402](https://img.shields.io/badge/x402-v2%20%C2%B7%20exact-6366f1)](https://docs.x402.org)
-[![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io/testnet)
+[![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
 
 One payment buys credits · consumption burns them as it happens · the buyer tops up
@@ -43,9 +43,13 @@ x402 pays for **one thing, once**. That breaks the moment consumption is continu
 - **You can't sign a payment per token.** Latency and fee overhead destroy the use case.
 - **You can't pay upfront.** Neither party knows how long the work will run.
 
-This isn't a hypothesis. Hedera's own x402 documentation lists it under *Constraints*:
+This isn't a hypothesis. Hedera's own x402 documentation says so, under
+[**Requirements and limitations**](https://docs.hedera.com/solutions/ai/x402):
 
-> Discrete per-request design (**not streaming** or multi-hop routing)
+> Settlement is per-request and discrete. x402 is **not built for streaming payments**
+> or multi-hop routing across ledgers.
+>
+> — [Hedera docs · x402](https://docs.hedera.com/solutions/ai/x402)
 
 [x402 issue #2273](https://github.com/x402-foundation/x402/issues/2273) proposes the fix —
 `metered-session`, prepaid sessions with auto-refund — and has sat **open with zero
