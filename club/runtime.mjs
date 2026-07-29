@@ -103,6 +103,17 @@ How to work:
    results back with deliver_file BEFORE you release the machine, because
    releasing destroys the filesystem.
 
+   A chat is one continuous piece of work. list_inputs shows both what the
+   human attached and what you delivered earlier, and stage_input takes either
+   by name, so a later step builds on an earlier one instead of repeating it.
+   If you cleaned a file in step one, stage that cleaned file in step two
+   rather than the raw one.
+
+   Match the machine to the step, not to the job. Preparation, parsing and
+   cleaning belong on a CPU lane; only put the step that needs an accelerator
+   on one, and release it as soon as that step is done. Holding a GPU through
+   a CPU step is the most expensive mistake available to you.
+
 6. If you do get stuck without funds, say so plainly and stop. Say what you
    produced, what it cost, what still needs doing, and how much more you need.
    Do not thrash: renting a second machine to retry the same step wastes the
@@ -404,15 +415,29 @@ function buildTools(run) {
       "which machine the job needs.",
     inputSchema: z.object({}),
     execute: async () => {
-      const list = assets.forWorkspace(run.workspaceId, run.threadId);
-      if (!list.length) return { inputs: [], note: "the human attached no files" };
+      // Everything in this chat, including what the agent made earlier.
+      //
+      // These used to be separate: inputs were the human's uploads and
+      // artifacts were hidden from the agent entirely. That made a multi-step
+      // job impossible. Clean a file in step one, deliver it, and step two
+      // cannot see the thing step one just produced, so it either redoes the
+      // work or gives up. A delivered artifact is an input to whatever comes
+      // next, and stage_input already accepts it by name.
+      const given = assets.forWorkspace(run.workspaceId, run.threadId);
+      const made = assets.artifactsOf(run.workspaceId, run.threadId);
+      const shape = (a, made) => ({
+        name: a.name, bytes: a.bytes, contentType: a.contentType,
+        sha256: a.sha256.slice(0, 16), needsChunking: a.needsChunking,
+        source: made ? "you made this earlier" : "the human attached this",
+        ...(a.description ? { description: a.description } : {}),
+      });
+      const files = [...given.map((a) => shape(a, false)), ...made.map((a) => shape(a, true))];
+      if (!files.length) return { files: [], note: "nothing is attached to this chat" };
       return {
-        inputs: list.map((a) => ({
-          name: a.name, bytes: a.bytes, contentType: a.contentType,
-          sha256: a.sha256.slice(0, 16), needsChunking: a.needsChunking,
-        })),
-        totalBytes: list.reduce((n, a) => n + a.bytes, 0),
-        note: "use stage_input to put these on a machine. Do not read them into your context.",
+        files,
+        totalBytes: files.reduce((n, a) => n + a.bytes, 0),
+        note: "stage_input puts any of these on a machine by name, including the ones " +
+              "you produced earlier. Do not read them into your context.",
       };
     },
   });
@@ -428,8 +453,11 @@ function buildTools(run) {
       const asset = assets.byName(run.workspaceId, a.name, run.threadId);
       if (!asset) {
         return {
-          error: `no input named ${a.name}`,
-          available: assets.forWorkspace(run.workspaceId, run.threadId).map((x) => x.name),
+          error: `no file named ${a.name} in this chat`,
+          available: [
+            ...assets.forWorkspace(run.workspaceId, run.threadId),
+            ...assets.artifactsOf(run.workspaceId, run.threadId),
+          ].map((x) => x.name),
         };
       }
       return assets.preview(asset.id);
@@ -442,7 +470,10 @@ function buildTools(run) {
     getWallet: () => threads.get(run.threadId)?.wallet ?? null,
     assets: {
       byName: (n) => assets.byName(run.workspaceId, n, run.threadId),
-      list: () => assets.forWorkspace(run.workspaceId, run.threadId),
+      list: () => [
+        ...assets.forWorkspace(run.workspaceId, run.threadId),
+        ...assets.artifactsOf(run.workspaceId, run.threadId),
+      ],
       read: (id) => assets.read(id),
       deliver: (spec) => {
         const art = assets.deliver(run.workspaceId, { ...spec, threadId: run.threadId });

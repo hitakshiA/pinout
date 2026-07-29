@@ -511,8 +511,10 @@ function machineOr404(sessionId) {
   const stage_input = tool({
     name: "stage_input",
     description:
-      "Copy a file the human attached to this workspace onto a machine you are " +
-      "renting. Use this for every input file. You never need to read the " +
+      "Copy a file from this chat onto a machine you are renting. Works for " +
+      "files the human attached AND for files you delivered earlier in this " +
+      "chat, so a later step can build on an earlier one without redoing it. " +
+      "Call list_inputs to see what is available. You never need to read the " +
       "contents yourself, and doing so would waste your context.",
     inputSchema: z.object({
       sessionId: z.string(),
@@ -520,11 +522,11 @@ function machineOr404(sessionId) {
       destPath: z.string().describe("absolute path on the machine, e.g. /work/data.csv"),
     }),
     execute: async (a) => {
-      if (!assets) return { error: "this workspace has no attached inputs" };
+      if (!assets) return { error: "this chat has no files" };
       const asset = assets.byName(a.name);
       if (!asset) {
         return {
-          error: `no input named ${a.name}`,
+          error: `no file named ${a.name} in this chat`,
           available: assets.list().map((x) => x.name),
         };
       }

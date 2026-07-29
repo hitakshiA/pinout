@@ -54,6 +54,35 @@ const DEMOS = {
       "counted, what it cost, and what was refunded.",
     expect: { kind: "video", minBytes: 20_000, minFrames: 30 },
   },
+  3: {
+    name: "a four-step pipeline, CPU and GPU, building on its own output",
+    files: ["/tmp/pinout-test/sensors.csv", "/tmp/pinout-test/crowd.mp4"],
+    ceiling: 900_000_000,
+    multi: true,
+    // Four turns in ONE chat, so the wallet, the memory and the files persist
+    // across them. Each step is meant to consume what the previous step made,
+    // which is the thing single-shot demos never exercise.
+    steps: [
+      "Clean sensors.csv on the cheapest CPU lane that can do it: drop duplicates and " +
+      "rows with a blank reading, lowercase the quality column and drop the bad ones, " +
+      "and normalise every timestamp to unix seconds. Deliver the cleaned CSV and tell " +
+      "me how many rows survived.",
+
+      "Using the cleaned CSV you just delivered, not the original, compute per-sensor " +
+      "summary statistics: count, mean, standard deviation and range of reading for " +
+      "each sensor id. Deliver that as a CSV. A CPU lane is enough for this.",
+
+      "Now the video. Count and track the people in crowd.mp4 on a GPU lane, draw boxes " +
+      "with track ids, and deliver an annotated mp4. Release the GPU as soon as the " +
+      "annotation is written.",
+
+      "Write me a short plain-text report tying it together: how many sensor rows " +
+      "survived cleaning, how many distinct sensors there were, and how many distinct " +
+      "people you counted in the video. Use the files you already produced rather than " +
+      "recomputing anything, and deliver the report as a .txt.",
+    ],
+    expect: { artifacts: 4 },
+  },
 };
 
 const api = (path, { method = "GET", cap, body } = {}) =>
@@ -276,12 +305,25 @@ async function main() {
     }
   })();
 
-  await jsonOr(await api(`/workspace/${wsId}/chats/${chat.id}/run`, {
-    method: "POST", cap, body: { task: demo.task, ceilingTinybar: demo.ceiling },
-  }), "start run");
-  console.log(C.you(`\nyou   ${demo.task.slice(0, 120)}...\n`));
+  const steps = demo.multi ? demo.steps : [demo.task];
 
-  await Promise.race([pump, new Promise((r) => setTimeout(r, 30 * 60_000))]);
+  /** One step. Resolves when the run reaches a terminal state. */
+  const runStep = async (task, n) => {
+    state.done = false; state.failed = false; state.answer = null;
+    console.log(C.you(`\nyou   [${n}/${steps.length}] ${task.slice(0, 110)}...\n`));
+    await jsonOr(await api(`/workspace/${wsId}/chats/${chat.id}/run`, {
+      method: "POST", cap, body: { task, ceilingTinybar: demo.ceiling },
+    }), "start run");
+    const until = Date.now() + 28 * 60_000;
+    while (!state.done && !state.failed && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    const arts = await jsonOr(await api(`/workspace/${wsId}/chats/${chat.id}`, { cap }), "read chat");
+    console.log(C.b(`  step ${n} ${state.failed ? "failed" : "done"} · artifacts so far: ${(arts.artifacts ?? []).length}`));
+    if (state.answer) console.log(C.dim(`  ${state.answer.slice(0, 260).replace(/\s+/g, " ")}`));
+  };
+
+  for (const [i, t] of steps.entries()) await runStep(t, i + 1);
   await reader.cancel().catch(() => {});
 
   // ---- what actually came back ----
