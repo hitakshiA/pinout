@@ -57,6 +57,7 @@ await m.release();                                   // unused seconds refunded 
 - [Two shapes of work](#two-shapes-of-work)
 - [Running out mid job](#running-out-mid-job)
 - [For AI agents](#for-ai-agents)
+- [The hosted agent](#the-hosted-agent)
 - [Guards](#guards)
 - [Quickstart](#quickstart)
 - [API](#api)
@@ -571,6 +572,79 @@ node agent/chat.mjs -p "rent a GPU and…"  # headless
 > 34 refunded, summing exactly to the 120 bought.
 
 ---
+
+## The hosted agent
+
+`pinout.club` runs an agent that rents compute and pays for it out of a wallet you fund.
+There is no sign-up and no user table. A workspace is a random id plus a capability your
+browser keeps; the server stores only its SHA-256, so a database dump does not let anyone
+resume your work. Lose the capability and the workspace is gone.
+
+```
+node club/server.mjs        # :4022, needs a Pinout server at PINOUT_URL
+```
+
+### How the money works
+
+You fund the wallet, not each purchase. That distinction is the whole design.
+
+An agent that has to stop and ask before every top-up loses the machine it is standing on
+while it waits for an answer. When credits run out a machine is held for a short grace
+period, and a human reading a funding request takes longer than that, so the job dies with
+its files on it. So the agent asks once for HBAR, and then spends it as the work requires.
+
+What makes that reasonable is that the money is never out of your hands:
+
+- the account is created only when you first fund it, and is bound to your address forever
+- it can only ever pay out to the account that filled it
+- `POST /workspace/:id/withdraw` returns HBAR at any time, **including mid job**
+- on close the balance is swept back and the account is deleted, so even the rent-exempt
+  remainder returns
+
+An agent that finds itself short simply asks again. Running out is reported as
+`paused_needs_funding`, not as an error, because it is not one.
+
+### Chats, files and results
+
+A workspace owns the wallet. A chat owns a conversation, its uploads and its results, and
+chats cannot see each other's files. They share the wallet because opening a Hedera account
+costs about 0.81 HBAR in fees, and charging that per chat would be absurd.
+
+File contents never enter the agent's context. It sees a name and a size, moves inputs onto
+a rented machine with `stage_input`, and hands results back with `deliver_file`. Both move
+bytes server-side, which is the only way a 40 MB checkpoint works at all.
+
+The agent can also **see**. `look_at` samples frames across a video, or reads an image, and
+reports what is actually in the pixels. This exists because a job once delivered a
+technically perfect video, 250 frames and the right duration and a matching checksum, with
+the subject composited out of it, and reported success. It had no way to know, so it
+inferred the result from the exit code.
+
+### Routes
+
+| | |
+|---|---|
+| `POST /workspace` | mint a workspace, returns the capability once |
+| `POST /workspace/:id/chats` | open a chat |
+| `POST /workspace/:id/chats/:chatId/files` | attach an input |
+| `POST /workspace/:id/chats/:chatId/run` | give the agent a task and a ceiling |
+| `GET /workspace/:id/events` | SSE; waits for a run rather than hanging up |
+| `POST /workspace/:id/decide` | `approve`, `deny`, or `revise` with feedback |
+| `POST /workspace/:id/fund` | confirm a transfer you signed |
+| `POST /workspace/:id/withdraw` | take HBAR back, any time |
+| `GET /workspace/:id/files/:assetId` | download a result |
+| `POST /workspace/:id/close` | stop, sweep, delete the account |
+
+```
+node club/test-routes.mjs   # 24 checks over HTTP against a running server
+node club/demo.mjs --demo 1 # a real job, end to end
+```
+
+> [!WARNING]
+> This is custodial. While a workspace is open the server holds a key that can move its
+> funds. That is acceptable for a labelled testnet build and is not acceptable for mainnet
+> without protocol-level delegation or a real custody design.
+
 
 ## Guards
 
