@@ -169,9 +169,13 @@ export async function flushCheckpoint(ctx, s) {
 /**
  * Close the session.
  *   1. flush any trailing burn checkpoint
- *   2. write the HIP-991 settlement anchor  <-- PRECONDITION
- *   3. only then issue the refund
- * If step 2 fails the refund is not sent and the session stays SETTLING.
+ *   2. REFUND the unused balance
+ *   3. record the settlement anchor — batched by default, dedicated on
+ *      ?settlement=priority when the session's revenue covers its cost
+ *
+ * The refund is deliberately NOT gated on the anchor. The anchor gates the
+ * SELLER'S claim; withholding a buyer's money because the seller cannot
+ * afford to publish its own numbers strands funds to protect bookkeeping.
  */
 export async function settleSession(ctx, s, cause = CAUSE.CLIENT_DISCONNECT) {
   // Serialize. Without this, two concurrent closes both pass the CLOSED check,

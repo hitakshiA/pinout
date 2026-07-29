@@ -11,10 +11,10 @@
 //   irrecoverable NETWORK fees — that is the incentive against over-reporting.
 //   The topic's custom fee goes to a collector fixed at topic creation, which is
 //   NOT the paying buyer unless you deliberately configure it that way.
-//   It is a protocol-enforced precondition: no refund is issued until this
-//   message lands, so the seller cannot walk away with the unused balance
-//   without paying to publish its final numbers on an immutable ledger whose
-//   fee terms anyone can read from the mirror node.
+//   Batched by default so one write covers many sessions. The refund is NOT
+//   gated on it: a seller that cannot afford an anchor must still return the
+//   buyer's money. What the anchor buys is a public, immutable record of the
+//   seller's final numbers, on a topic whose fee terms anyone can read.
 //
 // The anchor embeds the burn ledger's final sequence_number and running_hash,
 // which binds the cheap tier to the expensive one: you cannot restate history

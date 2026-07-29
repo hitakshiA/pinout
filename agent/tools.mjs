@@ -92,7 +92,7 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
 
   const close_session = tool({
     name: "close_session",
-    description: "Close a session. Writes the settlement anchor on-chain, then refunds unused credits.",
+    description: "Close a session. Refunds unused credits on-chain immediately; the settlement anchor is recorded separately (batched by default).",
     inputSchema: z.object({ sessionId: z.string(), cause: z.string().optional() }),
     execute: async (a) => {
       const r = await client.close(a.sessionId, a.cause);

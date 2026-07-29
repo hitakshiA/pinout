@@ -54,6 +54,7 @@ export async function verifySession(sessionId, receivedEventIds = null) {
 
   const failures = [];
   const checks = [];
+  let notAnchoredYet = false;
   const pass = (n, m) => checks.push({ check: n, ok: true, detail: m });
   const fail = (n, m) => { failures.push(m); checks.push({ check: n, ok: false, detail: m }); };
 
@@ -90,8 +91,14 @@ export async function verifySession(sessionId, receivedEventIds = null) {
     }
     anchor = { body: { ...b.mine, batchedIn: b.raw.sequence_number } };
   } else if (settle.length === 0 && batched.length === 0) {
-    fail("tier-binding", "no settlement anchor found — neither dedicated nor batched. " +
-                        "If the session just closed, the batch sweep may not have run yet.");
+    // NOT anchored yet is not the same as FRAUD. Batched settlement anchors on
+    // a sweep interval, so a correctly-billed session has a window where no
+    // anchor exists. Returning FAILED/exit 1 there accuses an honest seller,
+    // which is worse than saying "not yet".
+    notAnchoredYet = true;
+    checks.push({ check: "tier-binding", ok: null,
+      detail: "no settlement anchor yet — batched settlement anchors on a sweep " +
+              "interval, so this is expected shortly after close. Re-run to confirm." });
   } else if (settle.length !== 1) {
     fail("tier-binding", `expected 1 settlement anchor, found ${settle.length}`);
   } else {
@@ -138,14 +145,23 @@ export async function verifySession(sessionId, receivedEventIds = null) {
     else pass("commitments", `all ${burn.length} commitments match the client's event ids`);
   }
 
-  const verdict = failures.length ? "FAILED" : comparedToClient ? "PASSED" : "INCONCLUSIVE";
+  // An unanchored-but-otherwise-clean session is PENDING, never FAILED. Only a
+  // real inconsistency is fraud.
+  const verdict = failures.length
+    ? "FAILED"
+    : notAnchoredYet
+      ? "PENDING_ANCHOR"
+      : comparedToClient ? "PASSED" : "INCONCLUSIVE";
   return {
     verdict,
     // Self-consistency alone never establishes honesty: a seller that fabricates
     // events and checkpoints them faithfully passes checks 1-3.
-    note: comparedToClient
-      ? undefined
-      : "ledger is self-consistent but was NOT compared to any client record; over-billing cannot be ruled out",
+    note: notAnchoredYet
+      ? "Consumption checks pass. The settlement anchor is batched and has not " +
+        "landed yet — this is not evidence of over-billing. Re-run after the sweep."
+      : comparedToClient
+        ? undefined
+        : "ledger is self-consistent but was NOT compared to any client record; over-billing cannot be ruled out",
     sessionId,
     checkpoints: burn.length,
     ledgerBurned,

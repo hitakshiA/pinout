@@ -144,7 +144,8 @@ export class PinoutClient {
    * recomputed independently later. Fires onLow when the balance crosses
    * the top-up threshold — the socket is NOT dropped to top up.
    */
-  async stream(sessionId, { n = 500, provider, code, prompt, onEvent, onLow, onCheckpoint } = {}) {
+  async stream(sessionId, { n = 500, provider, code, prompt, onEvent, onLow, onCheckpoint,
+                            onPaused, onResumed } = {}) {
     const q = new URLSearchParams({ n: String(n) });
     if (provider) q.set("provider", provider);
     if (prompt) q.set("prompt", prompt);
@@ -189,6 +190,12 @@ export class PinoutClient {
               // never fires on a large one.
               const line = this.thresholds.get(sessionId) ?? 400;
               if (data.remainingUnits <= line) await onLow?.(data);
+            } else if (event === "SessionPaused") {
+              // The machine is held, not billing. Top up and the SAME job continues.
+              onPaused?.(data);
+              await onLow?.({ ...data, remainingUnits: 0 });
+            } else if (event === "SessionResumed") {
+              onResumed?.(data);
             } else if (event === "SessionTerminate") terminated = data;
           }
         }

@@ -32,7 +32,7 @@ import {
 } from "./session.mjs";
 import { getProvider } from "../providers/index.mjs";
 import { RATES } from "../providers/compute.mjs";
-import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS } from "../compute/guards.mjs";
+import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS, ANCHOR_COST_TINYBAR } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
 
@@ -171,7 +171,12 @@ export function lanePricing(lane) {
              topUpTinybar: CONFIG.topUpTinybar };
   }
   if (lane === "local") {
-    return { lane, unit: "second", pricePerUnit: 1000, sessionTinybar: 300_000, topUpTinybar: 150_000 };
+    // Rate is configurable so the exhaustion/refill path can be exercised in
+    // seconds rather than by burning a 300-second balance.
+    const per = Number(env.LOCAL_PRICE_PER_SEC ?? 1000);
+    return { lane, unit: "second", pricePerUnit: per,
+             sessionTinybar: per * Number(env.LOCAL_SESSION_SECONDS ?? 300),
+             topUpTinybar: per * Number(env.LOCAL_TOPUP_SECONDS ?? 150) };
   }
   const l = RATES.lanes[lane];
   if (!l) throw new Error(`unknown lane ${lane}`);
@@ -739,7 +744,14 @@ app.get("/session/:id/stream", (c) => {
       // Lane comes from the SESSION, never the request — otherwise a caller
       // could pay cpu-small prices and run on a GPU.
       lane: s.lane, code: jobCode, sessionId: s.id,
+      // Live credit balance so the provider can pause instead of dying.
+      onBalance: () => s.credits,
     })) {
+      if (ev.paused || ev.resumed) {
+        await stream.writeSSE({ event: ev.paused ? "SessionPaused" : "SessionResumed",
+          data: JSON.stringify({ ...ev, credits: s.credits, sessionId: s.id }) });
+        continue;   // not billed
+      }
       if (!s.burn(ev.id)) {
         await stream.writeSSE({
           event: "SessionTerminate",
@@ -780,8 +792,18 @@ app.get("/session/:id/stream", (c) => {
 app.post("/session/:id/close", async (c) => {
   const a = authorised(c); if (a.err) return a.err;
   const s = a.s;
-  // ?settlement=priority buys an immediate dedicated anchor; default is batched.
-  s.settlementTier = c.req.query("settlement") === "priority" ? "priority" : "batched";
+  // ?settlement=priority buys an immediate dedicated anchor — which costs the
+  // seller ~0.7345 HBAR. Unauthenticated and unconditional, that is a free
+  // drain: an attacker opens a session, burns nothing, closes with priority,
+  // is fully refunded, and forces 0.7345 HBAR of seller spend per call.
+  //
+  // So priority is only honoured when the session's own revenue covers the
+  // anchor. Otherwise it silently falls back to batched — the buyer still gets
+  // an immediate refund, just a shared anchor.
+  const wantsPriority = c.req.query("settlement") === "priority";
+  const revenue = s.burned * s.pricePerEvent;
+  s.settlementTier = wantsPriority && revenue >= ANCHOR_COST_TINYBAR ? "priority" : "batched";
+  s.priorityDenied = wantsPriority && s.settlementTier !== "priority";
   const out = await settleSession(ctx, s, c.req.query("cause") ?? CAUSE.CLIENT_DISCONNECT);
   // Signed receipt: binds the settled payment to the consumption actually
   // recorded on the burn ledger and to the settlement anchor.
@@ -803,12 +825,18 @@ app.post("/session/:id/close", async (c) => {
     ...out.terminate,
     anchored: out.anchored,
     anchorPending: out.anchorPending ?? false,
+    ...(s.priorityDenied ? { priorityDenied: {
+      reason: "session revenue does not cover a dedicated anchor",
+      revenueTinybar: s.burned * s.pricePerEvent,
+      anchorCostTinybar: ANCHOR_COST_TINYBAR,
+      settledAs: "batched",
+    } } : {}),
     settlementTier: out.settlementTier,
     anchorError: out.anchorError ?? undefined,
     settlementTx: out.settlement?.txId ?? null,
     settlementTxUrl: out.settlement ? hashscan.tx(out.settlement.txId) : null,
     settlementFeeTinybar: out.settlement?.paidToBuyer,
-    settlementFeeCollector: env.ANCHOR_FEE_COLLECTOR ?? "fixed at topic creation",
+    settlementFeeCollector: "fixed at topic creation; read it from the topic on the mirror node",
     refundTxUrl: out.refund ? hashscan.tx(out.refund.txId) : null,
     burnCheckpoints: s.checkpoints.length,
   });

@@ -286,7 +286,7 @@ refuses to say "passed".
 | Property | What it buys |
 |---|---|
 | **Fee-payer model** | The facilitator pays all network fees. The buyer needs **no fee headroom** — it can hold exactly the purchase amount and transact. |
-| **HIP-991 topic fees** | A log that **costs money to write** — ~0.7345 HBAR per settlement anchor in irrecoverable network fees. Publishing your final numbers is expensive, so over-reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a fixed collector set at topic creation, so it is *not* a payment to the buyer unless you configure it that way. |
+| **HIP-991 topic fees** | A log that **costs money to write** — ~0.7345 HBAR per settlement anchor in irrecoverable network fees, so publishing your final numbers is expensive and over-reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a collector fixed at topic creation — **not** to the paying buyer. | A log that **costs money to write** — ~0.7345 HBAR per settlement anchor in irrecoverable network fees. Publishing your final numbers is expensive, so over-reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a fixed collector set at topic creation, so it is *not* a payment to the buyer unless you configure it that way. |
 | **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
 | **Free mirror node** | Public, unauthenticated, no signup — so verification costs the buyer nothing. |
 
@@ -299,7 +299,7 @@ Full measured numbers, methodology, and the bugs found along the way:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HEDERA_ACCOUNT_ID` / `HEDERA_PRIVATE_KEY` | — | Buyer. Also the HIP-991 fee collector |
+| `HEDERA_ACCOUNT_ID` / `HEDERA_PRIVATE_KEY` | — | Buyer / payer. On this deployment it is *also* the fixed HIP-991 fee collector — a test artifact, not a design property. A third-party buyer never receives that fee. |
 | `SELLER_ACCOUNT_ID` / `SELLER_PRIVATE_KEY` | — | Seller. Owns both topics |
 | `BURN_TOPIC_ID` | — | Tier 1, plain HCS |
 | `TOPIC_ID` | — | Tier 2, HIP-991 |

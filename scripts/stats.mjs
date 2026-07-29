@@ -25,7 +25,8 @@ let owed = 0, refunded = 0, paidToBuyer = 0;
 for (const { b } of anchors) { owed += b.owedTinybar ?? 0; refunded += b.refundTinybar ?? 0; }
 for (const { b } of batches) for (const s of b.sessions ?? []) { owed += s.owedTinybar ?? 0; refunded += s.refundTinybar ?? 0; }
 
-// what the seller actually paid the buyer via HIP-991 custom fees
+// HIP-991 custom fees the seller paid to the topic's FIXED collector
+// (0.0.9795418 here) — not to whoever was buying
 const t = await mirror(`/api/v1/topics/${env.TOPIC_ID}`);
 const fee = t.custom_fees?.fixed_fees?.[0];
 paidToBuyer = (anchors.length + batches.length) * Number(fee?.amount ?? 0);

@@ -13,6 +13,7 @@
 //   node scripts/verify.mjs <sessionId> [--events last-session.json]
 //
 // Exit codes:  0 verified   1 fraud detected   2 inconclusive / usage
+//               3 consumption verified, batched anchor not yet on-chain
 import { readFileSync, existsSync } from "node:fs";
 import { verifySession } from "../src/verifier.mjs";
 import { env, MIRROR, hashscan } from "../src/config.mjs";
@@ -63,7 +64,8 @@ if (report.feeTerms) {
 
 console.log(`${report.checkpoints} burn checkpoint(s), ${report.ledgerBurned} units claimed\n`);
 for (const c of report.checks) {
-  console.log(`  ${c.ok ? "PASS" : "FAIL"}  ${c.check}: ${c.detail}`);
+  const tag = c.ok === null ? "WAIT" : c.ok ? "PASS" : "FAIL";
+  console.log(`  ${tag}  ${c.check}: ${c.detail}`);
 }
 
 console.log("\n" + "=".repeat(62));
@@ -77,6 +79,13 @@ if (report.verdict === "FAILED") {
   report.failures.forEach((f) => console.log(`  - ${f}`));
   links();
   process.exit(1);
+}
+if (report.verdict === "PENDING_ANCHOR") {
+  console.log("PENDING — consumption verified; the batched settlement anchor has not");
+  console.log("landed yet. This is NOT a billing discrepancy. Re-run after the sweep.");
+  if (report.note) console.log(`  ${report.note}`);
+  links();
+  process.exit(3);
 }
 if (report.verdict === "INCONCLUSIVE") {
   console.log("INCONCLUSIVE — the ledger is self-consistent, but it was NOT compared");

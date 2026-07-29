@@ -62,8 +62,10 @@ That cost is the incentive: publishing your final numbers is expensive, so
 over-reporting is expensive. The topic's HIP-991 custom fee (100,000 tinybar) is
 paid to a **fixed collector account set at topic creation** — on this deployment
 that is the operator's own treasury, so for a third-party buyer it is a
-self-payment and carries no auditor semantics. Set `ANCHOR_FEE_COLLECTOR` to an
-escrow or counterparty account if you want the fee to actually change hands. The
+self-payment and carries no auditor semantics. The collector is fixed when the topic is CREATED and can only be changed with
+the topic's `fee_schedule_key` — there is no runtime setting for it. (An
+`ANCHOR_FEE_COLLECTOR` env var exists but is inert: it is echoed in API output
+and wired to nothing on-chain. Do not rely on it.) The
 network fee is the part that bites regardless of who collects.
 
 
@@ -92,5 +94,5 @@ What would actually remove it, none of which is implemented:
 3. **Payer allowlisting** for a public testnet deployment.
 
 This is disclosed rather than hidden because it is the difference between "a
-buyer cannot steal from us" (true, and verified across four audits) and "we
+buyer cannot steal from us" (true, and verified across five independent audits) and "we
 cannot lose money" (false).

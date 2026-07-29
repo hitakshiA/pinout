@@ -11,7 +11,7 @@
 import { adapterFor } from "../compute/adapters/index.mjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT } from "../src/config.mjs";
+import { ROOT, env } from "../src/config.mjs";
 
 export const RATES = JSON.parse(readFileSync(join(ROOT, "compute/rates.json"), "utf8"));
 
@@ -33,7 +33,7 @@ export const compute = {
    * @param lane  cpu-small | cpu-4 | gpu-t4 | gpu-a100-40 | local
    * @param code  arbitrary source the agent wants executed
    */
-  async *stream({ n = 120, lane = "local", code, sessionId } = {}) {
+  async *stream({ n = 120, lane = "local", code, sessionId, onBalance } = {}) {
     const spec = lane === "local"
       ? { provider: "local" }
       : laneSpec(lane);
@@ -80,6 +80,14 @@ export const compute = {
         try { if (await adapter.isAlive?.(handle) === false) alive = false; } catch { /* keep going */ }
       }, 1000);
 
+      // Grace window when credits run out: hold the machine, stop billing, and
+      // wait for a top-up. Killing the sandbox the instant the balance hits zero
+      // destroys work the buyer already paid for — they top up and discover the
+      // job is gone. The seller eats the held seconds during grace, which is why
+      // it is short and bounded.
+      const graceMs = Number(env.EXHAUSTION_GRACE_MS ?? 90_000);
+      let pausedAt = null;
+
       try {
         while (emitted < n && alive) {
           const dueAt = meterStart + (emitted + 1) * 1000;
@@ -88,6 +96,29 @@ export const compute = {
 
           // If we fell behind (slow provider, GC), bill every whole second that
           // actually elapsed rather than silently losing them.
+          // Out of credits: pause rather than kill.
+          if (typeof onBalance === "function" && onBalance() <= 0) {
+            if (pausedAt === null) {
+              pausedAt = Date.now();
+              yield { id: `pause-${emitted}`, i: emitted, unit: "second", lane,
+                      provider: spec.provider, paused: true, billed: false,
+                      graceSeconds: Math.floor(graceMs / 1000),
+                      stdout: "", note: "credits exhausted — machine held, not billing. Top up to continue." };
+            }
+            if (Date.now() - pausedAt > graceMs) break;   // grace expired
+            await new Promise((r) => setTimeout(r, 1000));
+            continue;                                     // no tick, no billing
+          }
+          if (pausedAt !== null) {
+            // Topped up: resume where we left off. The clock is rebased so the
+            // buyer is not billed for the paused window.
+            meterStart += Date.now() - pausedAt;
+            pausedAt = null;
+            yield { id: `resume-${emitted}`, i: emitted, unit: "second", lane,
+                    provider: spec.provider, resumed: true, billed: false,
+                    stdout: "", note: "topped up — same machine, job never stopped." };
+          }
+
           const elapsedSec = Math.floor((Date.now() - meterStart) / 1000);
           while (emitted < Math.min(elapsedSec, n)) {
             const out = buffer.splice(0, buffer.length);

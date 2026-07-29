@@ -334,7 +334,6 @@ obvious: **`POST /session/:id/close` requires no authentication.** Anyone holdin
 a session id can close someone else's session, and every close makes the seller
 write a HIP-991 anchor at ~0.73 HBAR. That is a griefing and fund-drain vector.
 
-The session id is currently acting as a bearer token by accident rather than by
-design. `stream` and `topup` have the same exposure. The fix is a per-session
-secret issued at mint and required on every subsequent call — not yet
-implemented, and it is the top item before this is a real product.
+FIXED: a 32-byte per-session secret is issued once at mint, stored only as a
+SHA-256 hash and compared in constant time (`src/session.mjs`). `close`,
+`stream`, `topup` and `status` all require it; unauthenticated calls return 401.
