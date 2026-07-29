@@ -13,6 +13,8 @@
 [![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
 
+</div>
+
 x402 pays for a request at a price you already know. Compute is charged by the second and
 inference by the token, so nobody knows the total until the work has run.
 
@@ -31,8 +33,6 @@ mirror node. There is **no smart contract in this system**.
 
 **[Pinout Compute](#pinout-compute)** is the first service on it. Agents rent CPU and NVIDIA
 GPU machines by the second, from a T4 up to a B300.
-
-</div>
 
 ```js
 // an agent, holding its own wallet, renting its own machine
