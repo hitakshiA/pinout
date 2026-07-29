@@ -1,0 +1,343 @@
+/* The workspace.
+ *
+ * Structure is Cowork's, because it is the right structure and people already
+ * know it: chats down the left, a centred column that stays centred when the
+ * sidebar closes, and a right panel that only exists when there is something to
+ * put in it. The identity is the landing page's, so nothing here is borrowed
+ * twice.
+ *
+ * The one idea worth stealing outright is that agent prose is serif and sits on
+ * the background with no bubble. It stops the thing reading as a chat app and
+ * starts it reading as a document being written, which is what it is.
+ */
+
+.ws-root {
+  --ws-bg: #06040d;
+  --ws-panel: #0b0817;
+  --ws-raise: rgba(255, 255, 255, 0.045);
+  --ws-line: rgba(255, 255, 255, 0.09);
+  --ws-line-2: rgba(255, 255, 255, 0.16);
+  --ws-fg: #f4f2fb;
+  --ws-muted: rgba(204, 198, 223, 0.68);
+  --ws-dim: rgba(204, 198, 223, 0.42);
+  --ws-purple: #8259ef;
+  --ws-purple-2: #a98bff;
+  --ws-lav: #bbb6fd;
+  --ws-good: #6ee7a8;
+  --ws-warn: #f0c674;
+  --ws-bad: #ff8080;
+  --ws-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+
+  position: fixed;
+  inset: 0;
+  display: flex;
+  background: var(--ws-bg);
+  color: var(--ws-fg);
+  font-size: 15px;
+  overflow: hidden;
+}
+
+/* ---------------- sidebar ---------------- */
+
+.ws-side {
+  width: 292px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--ws-line);
+  background: var(--ws-panel);
+  transition: margin-left 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ws-side[data-open="false"] { margin-left: -292px; }
+
+.ws-side-top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 14px 10px;
+}
+.ws-brand { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: -0.01em; }
+
+.ws-newchat {
+  margin: 4px 12px 12px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 12px; border-radius: 10px;
+  border: 1px solid var(--ws-line);
+  background: var(--ws-raise);
+  color: var(--ws-fg); font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: background 0.16s ease, border-color 0.16s ease;
+}
+.ws-newchat:hover { background: rgba(130, 89, 239, 0.14); border-color: var(--ws-purple); }
+
+.ws-sec {
+  padding: 14px 16px 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ws-dim);
+}
+
+.ws-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.ws-list::-webkit-scrollbar { width: 8px; }
+.ws-list::-webkit-scrollbar-thumb { background: var(--ws-line); border-radius: 4px; }
+
+.ws-chat {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  color: var(--ws-muted); font-size: 14px;
+  cursor: pointer; border: none; background: none; width: 100%; text-align: left;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.ws-chat:hover { background: var(--ws-raise); color: var(--ws-fg); }
+.ws-chat[data-active="true"] { background: rgba(130, 89, 239, 0.16); color: var(--ws-fg); }
+.ws-chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* a chat holding money says so, quietly */
+.ws-chat-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-good); flex: none; }
+
+.ws-side-foot {
+  border-top: 1px solid var(--ws-line);
+  padding: 12px 14px;
+  font-size: 12.5px; color: var(--ws-dim);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+
+/* ---------------- main ---------------- */
+
+.ws-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+.ws-top {
+  height: 52px; flex: none;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--ws-line);
+}
+.ws-top-title { font-size: 14.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-top-spacer { flex: 1; }
+
+.ws-icon-btn {
+  width: 30px; height: 30px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 7px; border: none; background: none;
+  color: var(--ws-muted); cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.ws-icon-btn:hover { background: var(--ws-raise); color: var(--ws-fg); }
+.ws-icon-btn[data-on="true"] { background: rgba(130, 89, 239, 0.18); color: var(--ws-lav); }
+
+.ws-body { flex: 1; display: flex; min-height: 0; }
+
+/* the transcript column stays centred whatever the sidebar does */
+/* transcript + composer as one column, so the composer stays centred on the
+   transcript rather than on the window */
+.ws-centre { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.ws-scroll { flex: 1; overflow-y: auto; min-width: 0; }
+.ws-scroll::-webkit-scrollbar { width: 10px; }
+.ws-scroll::-webkit-scrollbar-thumb { background: var(--ws-line); border-radius: 5px; }
+.ws-col { max-width: 740px; margin: 0 auto; padding: 32px 24px 24px; }
+
+/* ---------------- turns ---------------- */
+
+.ws-turn { margin-bottom: 26px; }
+
+.ws-user {
+  margin-left: auto; max-width: 86%;
+  background: var(--ws-raise);
+  border: 1px solid var(--ws-line);
+  border-radius: 14px; padding: 13px 17px;
+  font-size: 14.5px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* the serif is the whole trick */
+.ws-agent {
+  font-family: var(--ws-serif);
+  font-size: 17.5px; line-height: 1.62;
+  letter-spacing: 0.002em;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ws-agent strong { font-weight: 600; }
+.ws-agent code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.86em; padding: 1px 5px; border-radius: 4px;
+  background: rgba(130, 89, 239, 0.16); color: var(--ws-lav);
+}
+.ws-agent a { color: var(--ws-lav); }
+
+/* tool activity: one dim line under the prose it belongs to. never a card,
+   because a run makes forty of these and cards would bury the writing */
+.ws-tools {
+  margin-top: 7px;
+  font-size: 13px; color: var(--ws-dim);
+  line-height: 1.5;
+}
+.ws-tools b { color: var(--ws-muted); font-weight: 500; }
+
+/* working indicator, with elapsed time because a job that bills by the second
+   should never hide how long it has been running */
+.ws-working { display: flex; align-items: center; gap: 10px; color: var(--ws-muted); font-size: 13.5px; }
+.ws-spark {
+  width: 15px; height: 15px; flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(130, 89, 239, 0.28);
+  border-top-color: var(--ws-purple-2);
+  animation: ws-spin 0.8s linear infinite;
+}
+@keyframes ws-spin { to { transform: rotate(360deg); } }
+
+.ws-caret {
+  display: inline-block; width: 2px; height: 1.05em;
+  background: var(--ws-purple-2); vertical-align: -0.16em;
+  margin-left: 2px; animation: ws-blink 1.05s steps(2, start) infinite;
+}
+@keyframes ws-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+/* things arrive rather than appearing */
+.ws-in { animation: ws-rise 0.34s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes ws-rise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+
+/* ---------------- cards in the transcript ---------------- */
+
+.ws-card {
+  border: 1px solid var(--ws-line);
+  background: var(--ws-panel);
+  border-radius: 13px; padding: 16px 18px;
+  margin-top: 12px;
+}
+.ws-card-title { font-family: var(--ws-serif); font-size: 16px; margin-bottom: 4px; }
+.ws-card-sub { font-size: 13.5px; color: var(--ws-muted); }
+
+/* the ask. the money moment, so it gets a purple edge and nothing else does */
+.ws-ask { border-color: rgba(130, 89, 239, 0.42); background: rgba(130, 89, 239, 0.06); }
+.ws-ask-amount { font-size: 25px; font-weight: 650; letter-spacing: -0.02em; }
+.ws-ask-grid {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 14px;
+  margin: 12px 0 14px; font-size: 13.5px;
+}
+.ws-ask-grid dt { color: var(--ws-dim); }
+.ws-ask-grid dd { margin: 0; color: var(--ws-muted); }
+.ws-warnline { color: var(--ws-warn); font-size: 13px; margin-bottom: 10px; }
+
+.ws-btns { display: flex; gap: 9px; flex-wrap: wrap; }
+.ws-btn {
+  padding: 8px 15px; border-radius: 8px; font-size: 13.5px; font-weight: 500;
+  border: 1px solid var(--ws-line-2); background: var(--ws-raise);
+  color: var(--ws-fg); cursor: pointer;
+  transition: transform 0.12s ease, background 0.16s ease, border-color 0.16s ease;
+}
+.ws-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.ws-btn:active { transform: translateY(1px); }
+.ws-btn-primary {
+  background: var(--ws-purple); border-color: var(--ws-purple);
+  color: #fff; font-weight: 600;
+}
+.ws-btn-primary:hover { background: var(--ws-purple-2); border-color: var(--ws-purple-2); }
+.ws-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* artifacts, inline */
+.ws-artifact {
+  display: flex; align-items: center; gap: 13px;
+  border: 1px solid var(--ws-line); border-radius: 12px;
+  padding: 12px 14px; margin-top: 11px; cursor: pointer;
+  background: var(--ws-panel);
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+.ws-artifact:hover { border-color: var(--ws-purple); background: rgba(130, 89, 239, 0.07); }
+.ws-artifact-icon {
+  width: 38px; height: 38px; flex: none; border-radius: 9px;
+  display: grid; place-items: center;
+  background: rgba(130, 89, 239, 0.16); color: var(--ws-lav);
+}
+.ws-artifact-name { font-size: 14px; font-weight: 500; }
+.ws-artifact-meta { font-size: 12.5px; color: var(--ws-dim); }
+
+/* ---------------- composer ---------------- */
+
+.ws-composer-wrap { flex: none; padding: 0 24px 18px; }
+.ws-composer {
+  max-width: 740px; margin: 0 auto;
+  border: 1px solid var(--ws-line-2); border-radius: 16px;
+  background: var(--ws-panel);
+  transition: border-color 0.18s ease;
+}
+.ws-composer:focus-within { border-color: rgba(130, 89, 239, 0.6); }
+.ws-composer textarea {
+  width: 100%; border: none; background: none; resize: none;
+  color: var(--ws-fg); font: inherit; font-size: 15px; line-height: 1.5;
+  padding: 15px 17px 6px; outline: none; max-height: 190px;
+}
+.ws-composer textarea::placeholder { color: var(--ws-dim); }
+.ws-composer-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 11px 11px;
+}
+.ws-composer-row .ws-top-spacer { flex: 1; }
+.ws-send {
+  width: 31px; height: 31px; border-radius: 8px; border: none;
+  background: var(--ws-purple); color: #fff;
+  display: grid; place-items: center; cursor: pointer;
+  transition: background 0.16s ease, opacity 0.16s ease;
+}
+.ws-send:disabled { opacity: 0.35; cursor: not-allowed; }
+.ws-disclaimer {
+  max-width: 740px; margin: 9px auto 0;
+  text-align: center; font-size: 11.5px; color: var(--ws-dim);
+}
+
+/* ---------------- right panel ---------------- */
+
+.ws-panel {
+  width: 428px; flex: none;
+  border-left: 1px solid var(--ws-line);
+  background: var(--ws-panel);
+  display: flex; flex-direction: column;
+  animation: ws-slide 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes ws-slide { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: none; } }
+
+.ws-panel-tabs {
+  display: flex; gap: 3px; padding: 9px 10px;
+  border-bottom: 1px solid var(--ws-line);
+}
+.ws-tab {
+  padding: 6px 12px; border-radius: 7px; border: none; background: none;
+  color: var(--ws-dim); font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.ws-tab:hover { color: var(--ws-fg); }
+.ws-tab[data-active="true"] { background: var(--ws-raise); color: var(--ws-fg); }
+.ws-panel-body { flex: 1; overflow-y: auto; padding: 16px; }
+.ws-panel-body::-webkit-scrollbar { width: 8px; }
+.ws-panel-body::-webkit-scrollbar-thumb { background: var(--ws-line); border-radius: 4px; }
+
+.ws-balance { font-size: 31px; font-weight: 650; letter-spacing: -0.025em; }
+.ws-balance-sub { font-size: 12.5px; color: var(--ws-dim); margin-top: 3px; }
+
+.ws-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--ws-line);
+  font-size: 13px;
+}
+.ws-row:last-child { border-bottom: none; }
+.ws-row-k { color: var(--ws-dim); }
+.ws-row-v { color: var(--ws-muted); text-align: right; }
+.ws-mono { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+
+.ws-in-amt { color: var(--ws-good); }
+.ws-out-amt { color: var(--ws-warn); }
+
+.ws-field {
+  width: 100%; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid var(--ws-line-2); background: var(--ws-bg);
+  color: var(--ws-fg); font: inherit; font-size: 13.5px; outline: none;
+}
+.ws-field:focus { border-color: var(--ws-purple); }
+.ws-label { display: block; font-size: 12px; color: var(--ws-dim); margin: 12px 0 5px; }
+
+.ws-empty { color: var(--ws-dim); font-size: 13.5px; text-align: center; padding: 34px 16px; line-height: 1.6; }
+
+.ws-link { color: var(--ws-lav); text-decoration: none; font-size: 12.5px; }
+.ws-link:hover { text-decoration: underline; }
+
+@media (max-width: 1100px) {
+  .ws-panel { width: 360px; }
+}
+@media (max-width: 860px) {
+  .ws-side { position: absolute; z-index: 20; height: 100%; }
+  .ws-panel { position: absolute; right: 0; z-index: 20; height: 100%; width: 100%; max-width: 420px; }
+}

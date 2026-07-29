@@ -19,3 +19,7 @@ last-session.json
 
 # custodial workspace state: holds wallet keys, never commit
 .club/
+web/node_modules/
+web/.next/
+web/.env.local
+web/shot.mjs
