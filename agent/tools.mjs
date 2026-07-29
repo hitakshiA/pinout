@@ -166,6 +166,145 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
     },
   });
 
+// A machine the agent is holding, keyed by session id, so it survives across
+// tool calls. Renting is only useful if the agent can come back to the machine.
+const rented = new Map();
+
+function machineOr404(sessionId) {
+  const m = rented.get(sessionId);
+  if (!m) {
+    throw new Error(
+      `no rented machine ${sessionId}. Rent one with rent_machine({lane:"cpu-small"}) ` +
+      `— and note that machines you released are gone.`);
+  }
+  return m;
+}
+
+  const rent_machine = tool({
+    name: "rent_machine",
+    description:
+      "Rent a real machine by the second and KEEP IT while you work on it. " +
+      "Unlike run_compute (which runs one script and gives the machine back), " +
+      "this holds the machine so you can run code, look at the result, decide " +
+      "what to do next, put files on it and take files off it — all on the same " +
+      "filesystem, with state carried between steps. You are billed per second " +
+      "you hold it, so release it when you are done and the unused seconds are " +
+      "refunded on-chain. ALWAYS call release_machine when finished.",
+    inputSchema: z.object({
+      lane: z.string().optional().describe("cpu-small (1 vCPU), cpu-4 (4 vCPU/8GiB), gpu-t4, gpu-a100-80. Default cpu-small"),
+      maxSeconds: z.number().optional().describe("hard ceiling on seconds held, default 300"),
+    }),
+    execute: async (a) => {
+      const lane = a.lane ?? "cpu-small";
+      const m = await client.rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
+      rented.set(m.sessionId, m);
+      return {
+        sessionId: m.sessionId, lane, secondsPurchased: m.secondsPurchased,
+        youCanNow: ["exec", "upload_file", "download_file", "list_files"],
+        remember: "the meter is running until you call release_machine",
+      };
+    },
+  });
+
+  const exec = tool({
+    name: "exec",
+    description:
+      "Run Python on a machine you are already renting. The filesystem and any " +
+      "files you wrote persist between calls, so you can build up work step by " +
+      "step. Returns stdout, stderr and the exit code — a non-zero exit means " +
+      "your code failed, and stderr will say why.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      code: z.string().describe("Python 3 source. Print what you want to see."),
+    }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      const r = await m.exec(a.code);
+      return {
+        exitCode: r.exitCode, ms: r.ms,
+        ...clipOutput(r.stdout ?? ""),
+        stderr: (r.stderr ?? "").slice(0, 4000),
+        secondsHeldSoFar: m.secondsUsed,
+      };
+    },
+  });
+
+  const upload_file = tool({
+    name: "upload_file",
+    description:
+      "Put a file onto a machine you are renting, so your code can read it. " +
+      "Give either text or base64 for binary. Parent directories are created.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      path: z.string().describe("absolute path on the machine, e.g. /work/input.csv"),
+      text: z.string().optional().describe("text content"),
+      contentBase64: z.string().optional().describe("base64 for binary content"),
+    }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      if (a.text === undefined && a.contentBase64 === undefined) {
+        return { error: "give either text or contentBase64" };
+      }
+      const buf = a.contentBase64 !== undefined
+        ? Buffer.from(a.contentBase64, "base64")
+        : Buffer.from(a.text, "utf8");
+      return await m.upload(a.path, buf);
+    },
+  });
+
+  const download_file = tool({
+    name: "download_file",
+    description:
+      "Take a file OFF a machine you are renting — a result, a trained model, a " +
+      "generated dataset. The content is checked against its sha256 in transit, " +
+      "so a truncated or corrupted read is an error rather than silently wrong data.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      path: z.string().describe("absolute path on the machine"),
+      asText: z.boolean().optional().describe("return text instead of base64, default true when it decodes cleanly"),
+    }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      const buf = await m.download(a.path);
+      const text = buf.toString("utf8");
+      const printable = !text.includes("\u0000") && Buffer.from(text, "utf8").equals(buf);
+      if (a.asText === false || !printable) {
+        return { path: a.path, bytes: buf.length, binary: true,
+                 contentBase64: buf.toString("base64").slice(0, 200_000) };
+      }
+      return { path: a.path, bytes: buf.length, ...clipOutput(text, 8000) };
+    },
+  });
+
+  const list_files = tool({
+    name: "list_files",
+    description: "List a directory on a machine you are renting.",
+    inputSchema: z.object({ sessionId: z.string(), dir: z.string().optional() }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      return await m.ls(a.dir ?? "/work");
+    },
+  });
+
+  const release_machine = tool({
+    name: "release_machine",
+    description:
+      "Give the machine back and stop the meter. Unused seconds are refunded " +
+      "on-chain immediately. Anything on its filesystem is gone, so download " +
+      "what you need first.",
+    inputSchema: z.object({ sessionId: z.string(), cause: z.string().optional() }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      const out = await m.release(a.cause ?? "work-finished");
+      rented.delete(a.sessionId);
+      return {
+        secondsHeld: m.secondsUsed,
+        consumedTinybar: out.consumedAmount, refundTinybar: out.refundAmount,
+        topUpsPurchased: m.topUps, refundTx: out.refundTxUrl,
+      };
+    },
+  });
+
   const run_compute = tool({
     name: "run_compute",
     description:
@@ -229,5 +368,6 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
     },
   });
 
-  return [discover, open_session, run_compute, top_up, stream, close_session, verify_session, spend_report];
+  return [discover, open_session, rent_machine, exec, upload_file, download_file, list_files,
+          release_machine, run_compute, top_up, stream, close_session, verify_session, spend_report];
 }

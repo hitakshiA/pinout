@@ -33,7 +33,7 @@ export const compute = {
    * @param lane  cpu-small | cpu-4 | gpu-t4 | gpu-a100-80 | local
    * @param code  arbitrary source the agent wants executed
    */
-  async *stream({ n = 120, lane = "local", code, sessionId, onBalance } = {}) {
+  async *stream({ n = 120, lane = "local", code, sessionId, onBalance, hold = false } = {}) {
     const spec = lane === "local"
       ? { provider: "local" }
       : laneSpec(lane);
@@ -44,7 +44,7 @@ export const compute = {
 
     try {
       const p = await adapter.provision({
-        code,
+        code, hold,
         // GPU lanes must land on an image that already has CUDA and torch.
         // Without this they booted python:3.11-slim, where the only way to use
         // the GPU was to pip install ~2.5GB of torch inside the session cap —
@@ -202,6 +202,55 @@ export const compute = {
     }
   },
 };
+
+/**
+ * Reach the machine a session is holding. Without these a session can only ever
+ * run the one script it was provisioned with — you cannot look at a result and
+ * decide what to do next, hand the machine an input file, or take an artifact
+ * away. Everything here operates on a machine that is ALREADY up and already
+ * being billed per second; none of it provisions anything.
+ */
+function machineFor(sessionId) {
+  const j = jobs.get(sessionId);
+  if (!j) {
+    const e = new Error("no machine is being held by this session");
+    e.code = "NO_MACHINE";
+    throw e;
+  }
+  return j;
+}
+
+function requireCapability(j, name) {
+  if (typeof j.adapter[name] !== "function") {
+    const e = new Error(`the ${j.lane} lane's provider does not support ${name}`);
+    e.code = "UNSUPPORTED";
+    throw e;
+  }
+}
+
+export async function execOnMachine(sessionId, code, sink) {
+  const j = machineFor(sessionId);
+  requireCapability(j, "exec");
+  return await j.adapter.exec(j.handle, code, sink);
+}
+
+export async function putFile(sessionId, path, buf) {
+  const j = machineFor(sessionId);
+  requireCapability(j, "writeFile");
+  return await j.adapter.writeFile(j.handle, path, buf);
+}
+
+export async function getFile(sessionId, path) {
+  const j = machineFor(sessionId);
+  requireCapability(j, "readFile");
+  return await j.adapter.readFile(j.handle, path);
+}
+
+export async function lsFiles(sessionId, dir) {
+  const j = machineFor(sessionId);
+  requireCapability(j, "listFiles");
+  return await j.adapter.listFiles(j.handle, dir);
+}
 
 /** What the machine actually cost, for three-way reconciliation. */
 export function jobResult(key) {

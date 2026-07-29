@@ -401,3 +401,52 @@ boundary silently became two. A 1247-byte file returned base64'd arrived as a
 
 After the fix, a 180,000-byte random binary on a single ~240 KB line arrives
 byte-for-byte with a matching sha256, on both providers.
+
+## Renting a machine instead of submitting a script (2026-07-29)
+
+A session used to be handed one script at provision time, and that was the whole
+relationship: no way to look at a result and decide what to do next, no way to
+give the machine an input, no way to take an artifact away. That is a batch job,
+not a rented machine — and for an agent it is close to useless, because an agent
+works by looking at what happened and choosing the next step.
+
+`hold=1` on the stream rents an idle machine and keeps it up for the seconds
+bought. The stream is the rental clock — it is still what bills per second and
+what the burn ledger records, so all the existing metering and on-chain
+verification applies unchanged. Against that held machine:
+
+| route | |
+|---|---|
+| `POST /session/:id/exec` | run code, get stdout/stderr/exit code |
+| `POST /session/:id/files` | put a file on it |
+| `GET /session/:id/files?path=` | take a file off it, with sha256 |
+| `GET /session/:id/files?dir=` | list a directory |
+
+None of these is separately priced; they act on a machine already being billed
+by the second. All are refused with 402 when credits hit zero, or a paused
+session would be free compute.
+
+Verified on both real providers — upload 14,580 B, exec reads it and writes
+state, a **separate** exec reads that state back, download a 1 MB artifact with
+sha verified in transit, exit codes propagated, money balancing exactly:
+
+| | Daytona `cpu-4` | Modal `gpu-t4` |
+|---|---|---|
+| held / billed | 12 s | 9 s |
+| state across execs | yes | yes (CUDA matmul + read prior file) |
+| artifact retrieved | 1,024,000 B | 13 B |
+| money | balances | balances |
+
+Two provider-specific faults had to be fixed to get there. On Daytona the
+keep-alive occupied the shell session, and Daytona runs a session's commands in
+order — so an exec issued later queued behind an infinite sleep and never ran,
+surfacing to the caller as a bare "fetch failed" while the rental kept billing.
+Hold mode now leaves the session empty and reads liveness from the sandbox. On
+Modal, `filesystem` is a getter, not a method.
+
+**You pay for thinking time.** An agent that rents a machine and then deliberates
+between steps is billed for those seconds. In the end-to-end agent run, 86
+seconds were billed for work whose compute was a few seconds — the rest was the
+model composing its next step. Generate inputs and decide the plan BEFORE
+renting; the one-shot `run_compute` remains the cheaper choice when the work is
+a single known script.

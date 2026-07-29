@@ -31,7 +31,7 @@ import {
   Session, CAUSE, flushCheckpoint, settleSession, settleExpired, flushPendingAnchors, pendingAnchor, makeClient,
 } from "./session.mjs";
 import { getProvider, PROVIDERS } from "../providers/index.mjs";
-import { RATES, jobResult } from "../providers/compute.mjs";
+import { RATES, jobResult, execOnMachine, putFile, getFile, lsFiles } from "../providers/compute.mjs";
 import { admit, admitAsync, sellerSolvency, maxSecondsFor, recordSpend, spendReport, reapOrphans, LIMITS, ANCHOR_COST_TINYBAR } from "../compute/guards.mjs";
 import { signOffer, signReceipt, keyId, sellerPublicKeyHex } from "./receipt.mjs";
 import { saveSession, loadSessions } from "./store.mjs";
@@ -713,6 +713,106 @@ app.post("/session/:id/topup", async (c) => {
  * request-line limit and the connection is reset before any guard can run —
  * so oversized submissions must have a body-shaped path with a real 413.
  */
+// ---------------------------------------------------------------------------
+// Working ON a rented machine.
+//
+// A session used to be handed one script at provision time and that was the
+// whole relationship: no way to look at a result and decide what to do next, no
+// way to give the machine an input, no way to take an artifact away. That is a
+// batch job, not a rented machine.
+//
+// These routes act on a machine the session is ALREADY holding and already
+// paying for by the second, so none of them is separately priced — the meter is
+// the stream that holds the machine. They are refused when the session has no
+// credits, otherwise a paused session would be free compute.
+// ---------------------------------------------------------------------------
+/** So a caller can prove a file arrived whole. */
+const sha256Hex = (buf) => createHash("sha256").update(buf).digest("hex");
+
+const MAX_FILE_BYTES = Number(env.MAX_FILE_BYTES ?? 32 * 1024 * 1024);
+
+/** Shared guard: authorised, holding a machine, and actually paying for it. */
+function machineAccess(c) {
+  const a = authorised(c);
+  if (a.err) return a;
+  const s = a.s;
+  if (s.state === "CLOSED" || s.state === "SETTLING") {
+    return { err: c.json({ error: `session is ${s.state}` }, 409) };
+  }
+  if (s.credits <= 0) {
+    return { err: c.json({
+      error: "no credits — the machine is held but not billing",
+      detail: "top up to keep working, or close to be refunded",
+      credits: s.credits }, 402) };
+  }
+  return a;
+}
+
+const machineErr = (c, e) =>
+  e.code === "NO_MACHINE"
+    ? c.json({ error: e.message,
+               detail: "open a stream with hold=1 to rent a machine, then exec against it" }, 409)
+    : e.code === "UNSUPPORTED"
+      ? c.json({ error: e.message }, 501)
+      : c.json({ error: e.message }, 500);
+
+app.post("/session/:id/exec", async (c) => {
+  const a = machineAccess(c); if (a.err) return a.err;
+  const body = await c.req.json().catch(() => null);
+  const code = body?.code;
+  if (typeof code !== "string" || !code.trim()) {
+    return c.json({ error: "body must be {code: string}" }, 400);
+  }
+  const bytes = Buffer.byteLength(code, "utf8");
+  if (bytes > LIMITS.maxCodeBytes) {
+    return c.json({ error: "code too large", bytes, maxBytes: LIMITS.maxCodeBytes }, 413);
+  }
+  const out = [];
+  const t0 = Date.now();
+  try {
+    const r = await execOnMachine(a.s.id, code, (line) => out.push(line));
+    const stdout = out.filter((l) => !l.startsWith("[stderr] ")).join("\n");
+    const stderr = out.filter((l) => l.startsWith("[stderr] "))
+                      .map((l) => l.slice(9)).join("\n");
+    return c.json({ exitCode: r.exitCode, stdout, stderr,
+                    ms: Date.now() - t0, creditsRemaining: a.s.credits });
+  } catch (e) { return machineErr(c, e); }
+});
+
+app.post("/session/:id/files", async (c) => {
+  const a = machineAccess(c); if (a.err) return a.err;
+  const body = await c.req.json().catch(() => null);
+  const path = body?.path, b64 = body?.contentBase64;
+  if (typeof path !== "string" || typeof b64 !== "string") {
+    return c.json({ error: "body must be {path: string, contentBase64: string}" }, 400);
+  }
+  const buf = Buffer.from(b64, "base64");
+  if (buf.length > MAX_FILE_BYTES) {
+    return c.json({ error: "file too large", bytes: buf.length, maxBytes: MAX_FILE_BYTES }, 413);
+  }
+  try {
+    const r = await putFile(a.s.id, path, buf);
+    return c.json({ path, ...r, sha256: sha256Hex(buf) });
+  } catch (e) { return machineErr(c, e); }
+});
+
+app.get("/session/:id/files", async (c) => {
+  const a = machineAccess(c); if (a.err) return a.err;
+  const path = c.req.query("path"), dir = c.req.query("dir");
+  try {
+    if (dir) return c.json({ dir, entries: await lsFiles(a.s.id, dir) });
+    if (!path) return c.json({ error: "pass ?path=<file> or ?dir=<directory>" }, 400);
+    const buf = await getFile(a.s.id, path);
+    if (buf.length > MAX_FILE_BYTES) {
+      return c.json({ error: "file too large to return", bytes: buf.length,
+                      maxBytes: MAX_FILE_BYTES }, 413);
+    }
+    // base64 so binary survives; sha256 so the caller can prove it arrived whole.
+    return c.json({ path, bytes: buf.length, sha256: sha256Hex(buf),
+                    contentBase64: buf.toString("base64") });
+  } catch (e) { return machineErr(c, e); }
+});
+
 app.post("/session/:id/code", async (c) => {
   const a = authorised(c); if (a.err) return a.err;
   const body = await c.req.json().catch(() => null);
@@ -776,6 +876,10 @@ app.get("/session/:id/stream", (c) => {
     try {
     for await (const ev of provider.stream({
       n, prompt: c.req.query("prompt"),
+      // hold=1 rents an IDLE machine and keeps it up for the seconds bought,
+      // instead of baking one script in at provision time. The stream is the
+      // rental clock; /exec and /files act on the machine while it ticks.
+      hold: c.req.query("hold") === "1",
       // Lane comes from the SESSION, never the request — otherwise a caller
       // could pay cpu-small prices and run on a GPU.
       lane: s.lane, code: jobCode, sessionId: s.id,

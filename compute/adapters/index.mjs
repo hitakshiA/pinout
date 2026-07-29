@@ -47,7 +47,12 @@ export class LocalAdapter extends ComputeAdapter {
     const { spawn } = await import("node:child_process");
     const handle = `local-${Date.now().toString(36)}`;
     const startedAt = Date.now();
-    const code = spec.code ?? "print('hello from local')";
+    // hold: no job baked in — the machine comes up idle and stays up so the
+    // renter can exec against it repeatedly. That is what "rent a machine"
+    // means; baking one script in at provision time makes it a one-shot.
+    const code = spec.hold
+      ? "import time\nwhile True: time.sleep(3600)"
+      : (spec.code ?? "print('hello from local')");
     const proc = spawn(process.execPath, ["-e", `
       const { spawn } = require("node:child_process");
       const p = spawn("python3", ["-u", "-c", ${JSON.stringify(code)}]);
@@ -71,6 +76,43 @@ export class LocalAdapter extends ComputeAdapter {
   }
 
   async isAlive(handle) { return this.jobs.get(handle)?.alive ?? false; }
+
+  async exec(handle, code, sink) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    const { spawn } = await import("node:child_process");
+    return await new Promise((resolve) => {
+      const p = spawn("python3", ["-u", "-c", code]);
+      const out = lineAssembler(sink), err = lineAssembler(sink, "[stderr] ");
+      p.stdout.on("data", out); p.stderr.on("data", err);
+      p.on("close", (c) => { out.flush(); err.flush(); resolve({ exitCode: c ?? 0 }); });
+      p.on("error", (e) => { sink(`[stderr] ${e.message}`); resolve({ exitCode: 127 }); });
+    });
+  }
+
+  async writeFile(handle, path, buf) {
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, buf);
+    return { bytes: buf.length };
+  }
+
+  async readFile(handle, path) {
+    const { readFile } = await import("node:fs/promises");
+    return await readFile(path);
+  }
+
+  async listFiles(handle, dir) {
+    const { readdir, stat } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const names = await readdir(dir);
+    return await Promise.all(names.map(async (n) => {
+      try { const st = await stat(join(dir, n));
+        return { name: n, size: st.size, isDir: st.isDirectory() }; }
+      catch { return { name: n }; }
+    }));
+  }
 
   async terminate(handle) {
     const j = this.jobs.get(handle);
@@ -107,18 +149,30 @@ export class DaytonaAdapter extends ComputeAdapter {
     // Base64 the payload. Passing source through a shell -c argument mangles
     // newlines (JSON escapes arrive as literal backslash-n) and breaks on any
     // quote the user's code contains.
-    const b64 = Buffer.from(spec.code ?? "print('hello')", "utf8").toString("base64");
-    const cmd = await sb.process.executeSessionCommand(sid, {
-      command: `echo ${b64} | base64 -d | python -u -`,
-      runAsync: true,
-    });
-    this.jobs.set(sb.id, { sb, sid, cmdId: cmd.cmdId, startedAt: t0, coldStartMs });
+    // hold: leave the shell session EMPTY. A keep-alive command occupies the
+    // session, and Daytona runs a session's commands in order — so an exec
+    // issued later queued behind an infinite sleep and never ran at all. In
+    // hold mode the sandbox itself is the thing being kept alive; liveness is
+    // read from the sandbox, not from a command's exit code.
+    let cmdId = null;
+    if (!spec.hold) {
+      // Base64 the payload. Passing source through a shell -c argument mangles
+      // newlines and breaks on any quote the user's code contains.
+      const b64 = Buffer.from(spec.code ?? "print('hello')", "utf8").toString("base64");
+      const cmd = await sb.process.executeSessionCommand(sid, {
+        command: `echo ${b64} | base64 -d | python -u -`,
+        runAsync: true,
+      });
+      cmdId = cmd.cmdId;
+    }
+    this.jobs.set(sb.id, { sb, sid, cmdId, startedAt: t0, coldStartMs, hold: !!spec.hold });
     return { handle: sb.id, startedAt: t0, coldStartMs };
   }
 
   async attachStream(handle, sink) {
     const j = this.jobs.get(handle);
     if (!j) throw new Error(`no such job ${handle}`);
+    if (j.hold) return;            // no baked-in job; output comes from exec()
     // Fire-and-forget. The callback ONLY pushes to the sink — doing work here
     // would block the WebSocket and Daytona drops the stream.
     const out = lineAssembler(sink);
@@ -135,6 +189,10 @@ export class DaytonaAdapter extends ComputeAdapter {
   async isAlive(handle) {
     const j = this.jobs.get(handle);
     if (!j) return false;
+    // A held machine has no job to finish — it lives until the renter releases
+    // it or their seconds run out. Asking "has the command exited?" would end
+    // the rental immediately, since there is no command.
+    if (j.hold) return true;
     try {
       const c = await j.sb.process.getSessionCommand(j.sid, j.cmdId);
       const code = c?.exitCode ?? c?.exit_code;
@@ -159,6 +217,57 @@ export class DaytonaAdapter extends ComputeAdapter {
         timestamp: String(m.timestamp),
       };
     } catch { return null; }
+  }
+
+  /** Run code on a machine that is already up. Streams output, returns exit code. */
+  async exec(handle, code, sink) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    const b64 = Buffer.from(code, "utf8").toString("base64");
+    const cmd = await j.sb.process.executeSessionCommand(j.sid, {
+      command: `echo ${b64} | base64 -d | python -u -`,
+      runAsync: true,
+    });
+    const out = lineAssembler(sink), err = lineAssembler(sink, "[stderr] ");
+    const logs = j.sb.process.getSessionCommandLogs(j.sid, cmd.cmdId, out, err)
+      .catch(() => {}).finally(() => { out.flush(); err.flush(); });
+    // Poll for the exit code; the log stream ends when the command does.
+    // Bounded: an unbounded poll turns a stuck command into a rental that keeps
+    // billing while the caller sees nothing at all.
+    const deadline = Date.now() + Number(env.EXEC_TIMEOUT_MS ?? 600_000);
+    let exitCode = null, timedOut = false;
+    for (let i = 0; Date.now() < deadline; i++) {
+      try {
+        const c = await j.sb.process.getSessionCommand(j.sid, cmd.cmdId);
+        if (c?.exitCode !== null && c?.exitCode !== undefined) { exitCode = c.exitCode; break; }
+      } catch { /* transient */ }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (exitCode === null) timedOut = true;
+    await logs;
+    return { exitCode, timedOut };
+  }
+
+  async writeFile(handle, path, buf) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    await j.sb.fs.uploadFile(buf, path);
+    return { bytes: buf.length };
+  }
+
+  async readFile(handle, path) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    return Buffer.from(await j.sb.fs.downloadFile(path));
+  }
+
+  async listFiles(handle, dir) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    const items = await j.sb.fs.listFiles(dir);
+    return (items ?? []).map((f) => ({
+      name: f.name, size: f.size, isDir: f.isDir ?? f.is_dir,
+    }));
   }
 
   async terminate(handle) {
@@ -203,7 +312,10 @@ export class ModalAdapter extends ComputeAdapter {
       idleTimeoutMs: (spec.idleTimeoutSeconds ?? 60) * 1000,
     });
     const coldStartMs = Date.now() - t0;           // Modal BILLS this window
-    const p = await sb.exec(["python", "-u", "-c", spec.code ?? "print('hello')"]);
+    // hold: idle machine that stays up for the renter to exec against.
+    const p = await sb.exec(spec.hold
+      ? ["sleep", "infinity"]
+      : ["python", "-u", "-c", spec.code ?? "print('hello')"]);
     const job = { sb, p, startedAt: t0, coldStartMs, finished: false, exitCode: null };
     // Watch the PROCESS, not the sandbox. A Modal sandbox outlives the process
     // it ran until its idle timeout, so polling the sandbox reported "alive"
@@ -246,6 +358,49 @@ export class ModalAdapter extends ComputeAdapter {
       const r = await j.sb.poll();          // sandbox still up (null while running)
       return r === null || r === undefined;
     } catch { return false; }
+  }
+
+  async exec(handle, code, sink) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    const p = await j.sb.exec(["python", "-u", "-c", code]);
+    const out = lineAssembler(sink), err = lineAssembler(sink, "[stderr] ");
+    const pumps = [
+      (async () => { try { for await (const c of p.stdout) out(c); } catch {} out.flush(); })(),
+      (async () => { try { for await (const c of p.stderr ?? []) err(c); } catch {} err.flush(); })(),
+    ];
+    const exitCode = await p.wait?.().catch(() => null) ?? null;
+    await Promise.all(pumps);
+    return { exitCode };
+  }
+
+  async writeFile(handle, path, buf) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    // Modal's filesystem writes from a LOCAL path, so stage to a temp file.
+    const { writeFile, mkdtemp, rm } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = await mkdtemp(join(tmpdir(), "pinout-up-"));
+    const local = join(dir, "payload");
+    try {
+      await writeFile(local, buf);
+      await j.sb.filesystem.copyFromLocal(local, path);
+      return { bytes: buf.length };
+    } finally { await rm(dir, { recursive: true, force: true }).catch(() => {}); }
+  }
+
+  async readFile(handle, path) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    return Buffer.from(await j.sb.filesystem.readBytes(path));
+  }
+
+  async listFiles(handle, dir) {
+    const j = this.jobs.get(handle);
+    if (!j) throw new Error(`no such machine ${handle}`);
+    const items = await j.sb.filesystem.listFiles(dir);
+    return (items ?? []).map((f) => ({ name: f.name ?? f.path, size: f.size, isDir: f.isDir }));
   }
 
   /** Modal's billing API is Team-tier only, so the GPU lane is self-instrumented. */

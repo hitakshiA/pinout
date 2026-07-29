@@ -24,4 +24,18 @@ export class ComputeAdapter {
 }
 
 /** Lanes a client may request. Kept separate from pricing (see rates.json). */
+/**
+ * Optional capabilities. A machine that is only ever handed one script at
+ * provision time is a batch job, not a rented machine — an agent cannot look at
+ * a result and decide what to do next, feed the machine an input file, or take
+ * an artifact away. Adapters implementing these turn a session into something
+ * you can actually work on.
+ *
+ *   exec(handle, code, sink)   run code on a machine that is already up
+ *   writeFile(handle, path, buf)
+ *   readFile(handle, path) -> Buffer
+ *   listFiles(handle, dir)
+ *
+ * provision({ hold: true }) brings a machine up idle and keeps it up.
+ */
 export const LANES = ["cpu-small", "cpu-4", "gpu-t4", "gpu-a100-80"];

@@ -6,6 +6,7 @@
 //   budgetTinybar     — cumulative cap across the whole client
 // Both throw before any signature exists, so no funds are ever at risk from a
 // mispriced or injected 402.
+import { createHash } from "node:crypto";
 import { PrivateKey } from "@hiero-ledger/sdk";
 import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
@@ -154,6 +155,95 @@ export class PinoutClient {
     return body;
   }
 
+  /**
+   * Rent a machine and work on it.
+   *
+   * The returned handle holds a real machine for the seconds you bought: run
+   * code, look at the result, decide what to do next, put files on it, take
+   * artifacts off it, then release it and get the unused seconds back. The
+   * background stream is the rental clock — it is what bills you per second and
+   * what the on-chain burn ledger records.
+   *
+   *   const m = await client.rent("cpu-4");
+   *   await m.upload("/tmp/in.csv", buf);
+   *   const r = await m.exec("import pandas as pd; ...");
+   *   const out = await m.download("/tmp/out.parquet");
+   *   await m.release();
+   */
+  async rent(lane = "cpu-small", { maxSeconds = 600, autoTopUp = true, onTick } = {}) {
+    const s = await this.openComputeSession(lane);
+    const id = s.sessionId;
+    let ticks = 0, paused = false, topUps = 0;
+    const streamDone = this.stream(id, {
+      n: maxSeconds, provider: "compute", hold: true,
+      onEvent: () => { ticks++; onTick?.(ticks); },
+      onPaused: async () => {
+        paused = true;
+        if (!autoTopUp || topUps >= 5) return;
+        try { await this.topUp(id); topUps++; } catch { /* surfaced on next call */ }
+      },
+      onResumed: () => { paused = false; },
+    }).catch((e) => ({ error: e }));
+
+    // The machine is not usable until it has actually been provisioned; the
+    // first tick is the signal that it is up.
+    const upBy = Date.now() + 180_000;
+    while (ticks === 0 && Date.now() < upBy) await new Promise((r) => setTimeout(r, 250));
+    if (ticks === 0) {
+      await this.close(id, "provision-timeout").catch(() => {});
+      throw new Error("machine did not come up within 180s");
+    }
+
+    const call = async (path, init, timeoutMs = 630_000) => {
+      // Explicit timeout: undici's default surfaces a hung exec as a bare
+      // "fetch failed" with no indication that the machine is still rented and
+      // still billing.
+      let r;
+      try {
+        r = await fetch(`${this.base}/session/${id}${path}`, {
+          ...init,
+          signal: AbortSignal.timeout(timeoutMs),
+          headers: { ...this.#auth(id), "Content-Type": "application/json", ...(init?.headers ?? {}) },
+        });
+      } catch (e) {
+        const err = new Error(
+          `${path} failed after ${Math.round(timeoutMs / 1000)}s: ${e.message}. ` +
+          `The machine is STILL RENTED and still billing — call release() to stop the meter and be refunded.`);
+        err.cause = e; err.stillRented = true;
+        throw err;
+      }
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) { const e = new Error(body.error ?? `${r.status}`); e.status = r.status; e.detail = body.detail; throw e; }
+      return body;
+    };
+
+    return {
+      sessionId: id, lane, secondsPurchased: s.credits,
+      get secondsUsed() { return ticks; },
+      get paused() { return paused; },
+      get topUps() { return topUps; },
+      exec: (code) => call("/exec", { method: "POST", body: JSON.stringify({ code }) }),
+      upload: (path, buf) => call("/files", { method: "POST",
+        body: JSON.stringify({ path, contentBase64: Buffer.from(buf).toString("base64") }) }),
+      download: async (path) => {
+        const b = await call(`/files?path=${encodeURIComponent(path)}`);
+        const buf = Buffer.from(b.contentBase64, "base64");
+        // Verify in transit rather than trusting the length field.
+        const got = createHash("sha256").update(buf).digest("hex");
+        if (got !== b.sha256) throw new Error(`download corrupted: sha mismatch for ${path}`);
+        return buf;
+      },
+      ls: (dir = "/tmp") => call(`/files?dir=${encodeURIComponent(dir)}`),
+      status: () => this.status(id),
+      topUp: () => this.topUp(id),
+      release: async (cause = "work-finished") => {
+        const out = await this.close(id, cause);
+        await streamDone;
+        return out;
+      },
+    };
+  }
+
   async close(sessionId, cause, { timeoutMs = 120000, settlement } = {}) {
     const q = new URLSearchParams();
     if (cause) q.set("cause", cause);
@@ -172,9 +262,10 @@ export class PinoutClient {
    * the top-up threshold — the socket is NOT dropped to top up.
    */
   async stream(sessionId, { n = 500, provider, code, prompt, onEvent, onLow, onCheckpoint,
-                            onPaused, onResumed, onWaiting } = {}) {
+                            onPaused, onResumed, onWaiting, hold = false } = {}) {
     const q = new URLSearchParams({ n: String(n) });
     if (provider) q.set("provider", provider);
+    if (hold) q.set("hold", "1");
     if (prompt) q.set("prompt", prompt);
     // Arbitrary source is base64'd so quoting and newlines survive the URL.
     // Large payloads must be staged in a body; a long query string is reset by
