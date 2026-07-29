@@ -327,6 +327,30 @@ function buildTools(run) {
     // the machine it is standing on while it waits for an answer.
     requireApproval: true,
     execute: async (input) => {
+      // If the money is already there, take it and go.
+      //
+      // A human can fund the wallet before approving the ask, and with the
+      // panel sitting right next to the transcript that is the natural order:
+      // read the request, top the wallet up, then say yes. The tool used to
+      // park regardless and wait for a transfer that had already happened, so
+      // the run hung with a funded wallet on screen. Watched it sit at
+      // "waiting for 0.9 HBAR" for nine minutes against a balance of 3.
+      const already = threads.get(run.threadId)?.wallet;
+      if (already) {
+        const have = await balanceOf(already.accountId).catch(() => 0);
+        if (have >= Number(input.requestTinybar)) {
+          run.setState(RUN_STATE.WORKING);
+          run.say("funded", {
+            accountId: already.accountId, tinybar: have, alreadyHeld: true,
+            hashscan: hashscanAccount(already.accountId),
+          });
+          return {
+            funded: true, accountId: already.accountId, balanceTinybar: have,
+            note: `Your wallet already holds ${(have / 1e8).toFixed(4)} HBAR, which covers this. ` +
+                  `Spend it as the job needs; call wallet_balance to see what is left.`,
+          };
+        }
+      }
       const info = await run.awaitFunding(input.requestTinybar, input.plan);
       const balance = await balanceOf(info.accountId).catch(() => 0);
       run.setState(RUN_STATE.WORKING);
