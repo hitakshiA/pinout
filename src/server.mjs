@@ -801,6 +801,13 @@ app.get("/session/:id/stream", (c) => {
           note: "session closed — machine released" }) });
         break;
       }
+      if (ev.provisionFailed) {
+        // Never charge for a machine that was never provisioned.
+        await stream.writeSSE({ event: "SessionTerminate", data: JSON.stringify({
+          type: "SessionTerminate", session: s.id, cause: CAUSE.PROVIDER_ERROR,
+          error: ev.error, note: ev.note, creditsRemaining: s.credits }) });
+        break;
+      }
       if (ev.waiting) {
         // Keeps the SSE channel alive while credits are zero. Never billed.
         await stream.writeSSE({ event: "SessionWaiting",

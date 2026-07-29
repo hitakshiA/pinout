@@ -39,7 +39,9 @@
       "providerCostPerSecUsd": 0.00025678,
       "creditTinybar": 411000,
       "marginPct": 10,
-      "_costVerified": true
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
+      "_imageNote": "torch+CUDA preinstalled; a bare python image made this lane unusable for ML"
     },
     "gpu-a100-40": {
       "provider": "modal",
@@ -49,7 +51,9 @@
       "providerCostPerSecUsd": 0.00076856,
       "creditTinybar": 1229000,
       "marginPct": 10,
-      "_costVerified": true
+      "_costVerified": true,
+      "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
+      "_imageNote": "torch+CUDA preinstalled; a bare python image made this lane unusable for ML"
     }
   },
   "_laneSplit": "Daytona = CPU only (no GPU on this plan). Modal = GPU only.",

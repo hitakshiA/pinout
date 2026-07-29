@@ -181,7 +181,15 @@ export class ModalAdapter extends ComputeAdapter {
 
   async provision(spec) {
     const { ModalClient } = await import("modal");
-    const modal = new ModalClient();
+    // Tokens passed explicitly. With MODAL_PROFILE set but no .modal.toml on
+    // the box (which is the normal case for a server deploy), the SDK resolves
+    // the profile, finds no credentials in it, and fails with "Profile is
+    // missing token_id or token_secret" — even though both are in the env.
+    const modal = new ModalClient(
+      env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET
+        ? { tokenId: env.MODAL_TOKEN_ID, tokenSecret: env.MODAL_TOKEN_SECRET }
+        : undefined
+    );
     const app = await modal.apps.fromName(spec.app ?? "pinout-compute", { createIfMissing: true });
     const image = modal.images.fromRegistry(spec.image ?? "python:3.11-slim");
 
@@ -196,7 +204,16 @@ export class ModalAdapter extends ComputeAdapter {
     });
     const coldStartMs = Date.now() - t0;           // Modal BILLS this window
     const p = await sb.exec(["python", "-u", "-c", spec.code ?? "print('hello')"]);
-    this.jobs.set(sb.sandboxId ?? sb.id, { sb, p, startedAt: t0, coldStartMs });
+    const job = { sb, p, startedAt: t0, coldStartMs, finished: false, exitCode: null };
+    // Watch the PROCESS, not the sandbox. A Modal sandbox outlives the process
+    // it ran until its idle timeout, so polling the sandbox reported "alive"
+    // long after the work was done — measured at 79 seconds billed for a job
+    // that finished in 16.5. Billing a machine whose work is already over is
+    // the exact overcharge this system exists to prevent.
+    Promise.resolve(p.wait?.())
+      .then((code) => { job.finished = true; job.exitCode = code ?? 0; })
+      .catch(() => { job.finished = true; });
+    this.jobs.set(sb.sandboxId ?? sb.id, job);
     return { handle: sb.sandboxId ?? sb.id, startedAt: t0, coldStartMs };
   }
 
@@ -224,8 +241,9 @@ export class ModalAdapter extends ComputeAdapter {
   async isAlive(handle) {
     const j = this.jobs.get(handle);
     if (!j) return false;
+    if (j.finished) return false;           // the process exited; stop the meter
     try {
-      const r = await j.sb.poll();          // null while running
+      const r = await j.sb.poll();          // sandbox still up (null while running)
       return r === null || r === undefined;
     } catch { return false; }
   }

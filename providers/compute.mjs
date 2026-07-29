@@ -45,6 +45,11 @@ export const compute = {
     try {
       const p = await adapter.provision({
         code,
+        // GPU lanes must land on an image that already has CUDA and torch.
+        // Without this they booted python:3.11-slim, where the only way to use
+        // the GPU was to pip install ~2.5GB of torch inside the session cap —
+        // billed to the buyer, and usually longer than the cap allows.
+        image: spec.image,
         vcpu: spec.vcpu, memGiB: spec.memGiB, memMiB: (spec.memGiB ?? 8) * 1024,
         gpu: spec.gpu ? String(spec.gpu).replace(/-.*$/, "") : undefined,
         timeoutSeconds: n + 60,
@@ -58,7 +63,16 @@ export const compute = {
     }
 
     if (provisionError) {
-      yield { id: "err-0", i: 0, unit: "second", stderr: `provision failed: ${provisionError.message}` };
+      // This used to be a plain event, so the server BILLED a second for a
+      // machine that was never provisioned, and put the reason in a `stderr`
+      // field nothing reads — the buyer was charged for an invisible failure.
+      console.error(`provision failed (lane ${lane}, provider ${spec.provider}):`, provisionError);
+      yield {
+        id: "err-0", i: 0, unit: "second", lane, provider: spec.provider,
+        provisionFailed: true, billed: false, stdout: "",
+        error: provisionError.message,
+        note: "the machine was never provisioned, so nothing was billed",
+      };
       return;
     }
 
