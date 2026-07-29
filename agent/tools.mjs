@@ -210,7 +210,10 @@ export function pinoutTools({
       "instead throws away the work already paid for.",
     inputSchema: z.object({ sessionId: z.string() }),
     execute: async (a) => {
-      const r = await pinout().topUp(a.sessionId);
+      // Prefer the machine handle. It owns the paused/starved state for a
+      // rented session, and topping up around it leaves that state stale.
+      const held = rented.get(a.sessionId);
+      const r = held ? await held.topUp() : await pinout().topUp(a.sessionId);
       return { credits: r.credits, paidTinybar: r.paidTinybar ?? r.amountPaid,
                paymentTx: r.paymentTxUrl ?? r.paymentTx,
                note: "the job resumes on the same machine, from where it paused" };

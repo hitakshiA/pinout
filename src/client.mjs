@@ -214,13 +214,27 @@ export class PinoutClient {
       // Fail fast rather than blocking against a machine whose meter stopped.
       // A paused session delivers nothing; waiting on it only converts an
       // out-of-credit error into a timeout ten minutes later.
+      //
+      // But ASK the server before refusing. The flag is set inside this
+      // closure and a top-up can arrive from outside it: the agent tool calls
+      // client.topUp(sessionId) directly, which never touches `starved`. A
+      // cached flag therefore outlived the condition it described, every exec
+      // after a successful top-up failed "out of credits", and the agent did
+      // the sensible thing with that information and rented a second machine.
+      // Trusting stale local state is what turned one recoverable pause into
+      // a loop of abandoned sessions.
       if (paused && starved) {
-        const e = new Error(
-          `session ${id.slice(0, 8)} is out of credits and could not top up: ${starved}. ` +
-          `The machine is HELD, not destroyed, and your files are intact. ` +
-          `Get more funds into this wallet and call topUp(), or release() to stop and be refunded.`);
-        e.outOfCredits = true; e.stillRented = true;
-        throw e;
+        const live = await this.status(id).catch(() => null);
+        if (live && (live.credits ?? live.remainingUnits ?? 0) > 0) {
+          paused = false; starved = null;
+        } else {
+          const e = new Error(
+            `session ${id.slice(0, 8)} is out of credits and could not top up: ${starved}. ` +
+            `The machine is HELD, not destroyed, and your files are intact. ` +
+            `Get more funds into this wallet and call topUp(), or release() to stop and be refunded.`);
+          e.outOfCredits = true; e.stillRented = true;
+          throw e;
+        }
       }
       // Explicit timeout: undici's default surfaces a hung exec as a bare
       // "fetch failed" with no indication that the machine is still rented and
@@ -262,7 +276,11 @@ export class PinoutClient {
       },
       ls: (dir = "/tmp") => call(`/files?dir=${encodeURIComponent(dir)}`),
       status: () => this.status(id),
-      topUp: () => this.topUp(id),
+      topUp: async () => {
+        const r = await this.topUp(id);
+        paused = false; starved = null;   // the pause is over; do not make exec re-derive that
+        return r;
+      },
       release: async (cause = "work-finished") => {
         const out = await this.close(id, cause);
         await streamDone;
