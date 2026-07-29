@@ -171,43 +171,51 @@ app.post("/workspace/:id/fund", async (c) => {
 app.get("/workspace/:id/events", (c) => {
   const a = claim(c); if (a.err) return a.err;
   return streamSSE(c, async (stream) => {
-    // Wait for a run rather than hanging up on a client that got here first.
+    // One connection, many runs.
     //
-    // A browser subscribes and THEN posts the task, because doing it the other
-    // way round races the opening events out of existence. This used to answer
-    // "idle" and close, so every correctly written frontend saw an empty
-    // stream and a job it could not watch.
+    // This used to close when a run reached a terminal state, which is right
+    // for watching one job and wrong for a workspace: the second task in a
+    // chat streamed nothing, because the client's stream had already hung up
+    // after the first. A four-step pipeline showed exactly one step.
+    //
+    // The stream now outlives any individual run and goes back to waiting.
     const ac = new AbortController();
     stream.onAbort(() => ac.abort());
-    let run = rt.runOf(a.w.id);
-    if (!run) {
-      await stream.writeSSE({ event: "idle", data: JSON.stringify({ state: a.w.state, waiting: true }) });
-      run = await rt.waitForRun(a.w.id, { signal: ac.signal });
-      if (!run) return;
-    }
-    for (const ev of run.log) {
-      await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
-    }
-    await new Promise((resolve) => {
-      const onEvent = (ev) => {
-        stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) }).catch(() => {});
-        if (ev.type === "state" && ["done", "failed", "closed"].includes(ev.state)) resolve();
-      };
-      run.on("event", onEvent);
-      stream.onAbort(() => { run.off("event", onEvent); resolve(); });
-    });
-  });
-});
+    const sent = new Set();
 
-/** Close: stop the run, sweep the balance back to the funder, delete the account. */
-app.post("/workspace/:id/close", async (c) => {
-  const a = claim(c); if (a.err) return a.err;
-  try {
-    const swept = await rt.closeWorkspace(a.w.id);
-    return c.json({ closed: true, swept });
-  } catch (e) {
-    return c.json({ error: e.message }, 500);
-  }
+    while (!ac.signal.aborted) {
+      let run = rt.runOf(a.w.id);
+      if (!run) {
+        await stream.writeSSE({
+          event: "idle",
+          data: JSON.stringify({ state: a.w.state, waiting: true }),
+        });
+        run = await rt.waitForRun(a.w.id, { signal: ac.signal });
+        if (!run || ac.signal.aborted) return;
+      }
+
+      // replay what this run already has, without repeating anything
+      for (const ev of run.log) {
+        const k = `${run.startedAt}:${ev.at}:${ev.type}`;
+        if (sent.has(k)) continue;
+        sent.add(k);
+        await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
+      }
+
+      await new Promise((resolve) => {
+        const onEvent = (ev) => {
+          stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) }).catch(() => {});
+          if (ev.type === "state" && ["done", "failed", "closed"].includes(ev.state)) {
+            run.off("event", onEvent);
+            resolve();
+          }
+        };
+        run.on("event", onEvent);
+        ac.signal.addEventListener("abort", () => { run.off("event", onEvent); resolve(); }, { once: true });
+      });
+      // loop round and wait for whatever the human asks next
+    }
+  });
 });
 
 /**

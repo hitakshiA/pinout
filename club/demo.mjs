@@ -188,7 +188,7 @@ async function main() {
   const funder = env.HEDERA_ACCOUNT_ID;
   let firstFundingDone = false;
   let fundedTotal = 0, topUps = 0;
-  const state = { done: false, failed: false, answer: null, paused: null };
+  const state = { done: false, failed: false, answer: null, paused: null, allDone: false };
 
   // follow the run the way the browser does, over SSE
   const es = await fetch(`${BASE}/workspace/${wsId}/events?cap=${encodeURIComponent(cap)}`);
@@ -290,9 +290,10 @@ async function main() {
     }
   };
 
+  // the pump must outlive any single step, or step two streams nothing
   const pump = (async () => {
     let buf = "";
-    while (!state.done && !state.failed) {
+    while (!state.allDone) {
       const { value, done } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
@@ -324,6 +325,7 @@ async function main() {
   };
 
   for (const [i, t] of steps.entries()) await runStep(t, i + 1);
+  state.allDone = true;
   await reader.cancel().catch(() => {});
 
   // ---- what actually came back ----
