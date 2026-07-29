@@ -1,66 +1,60 @@
 import { chromium } from "playwright";
-
-const FILE = process.argv[2];
-const TASK = process.argv[3];
-const TAG  = process.argv[4] ?? "d";
+const FILE = process.argv[2], TASK = process.argv[3], TAG = process.argv[4] ?? "d";
 
 const b = await chromium.launch();
-const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+const p = await b.newPage({ viewport: { width: 1600, height: 950 } });
 p.on("pageerror", (e) => console.log("PAGEERROR", String(e).slice(0, 160)));
 await p.goto("http://localhost:3111/app", { waitUntil: "domcontentloaded" });
 await p.waitForTimeout(3000);
+await p.click(".ws-newchat"); await p.waitForTimeout(1200);
 
-// fresh task so the wallet is this chat's own
-await p.click(".ws-newchat");
-await p.waitForTimeout(1200);
+// fund the chat first, the way a person would before setting it going
+await p.click(".ws-panel-tabs .ws-tab");
+await p.waitForTimeout(300);
+const modes = await p.$$(".ws-panel-body .ws-tab");
+if (modes[1]) await modes[1].click();
+await p.waitForTimeout(300);
+await p.fill(".ws-panel-body .ws-field", "3");
+const fund = await p.$(".ws-panel-body .ws-btn-primary");
+if (fund) { await fund.click(); console.log("funding 3 HBAR..."); }
+await p.waitForTimeout(14000);
+console.log("balance:", await p.evaluate(() => document.querySelector(".ws-balance")?.textContent));
 
 await p.setInputFiles(".ws-composer input[type=file]", FILE);
-await p.waitForTimeout(600);
+await p.waitForTimeout(500);
 await p.fill(".ws-composer textarea", TASK);
 await p.click(".ws-send");
-console.log("sent, file attached:", FILE.split("/").pop());
+console.log("task sent");
 
 const seen = new Set();
-let approved = false;
 for (let i = 0; i < 400; i++) {
   await p.waitForTimeout(3000);
   const s = await p.evaluate(() => ({
     tools: [...document.querySelectorAll(".ws-tools")].map((e) => e.textContent),
-    ask: document.querySelector(".ws-ask") ? document.querySelector(".ws-ask").textContent.slice(0, 150) : null,
+    ask: !!document.querySelector(".ws-ask"),
     working: document.querySelector(".ws-working")?.textContent ?? null,
     arts: document.querySelectorAll(".ws-artifact").length,
     bal: document.querySelector(".ws-balance")?.textContent ?? null,
-    agent: [...document.querySelectorAll(".ws-agent")].length,
+    decision: [...document.querySelectorAll(".ws-decision")].map((e) => e.textContent),
+    stop: !!document.querySelector(".ws-stop"),
   }));
   for (const t of s.tools) if (t && !seen.has(t)) { seen.add(t); console.log("  ·", t); }
-
-  if (s.ask && !approved) {
-    console.log("ASK:", s.ask.replace(/\s+/g, " ").slice(0, 130));
+  for (const d of s.decision) if (d && !seen.has("D" + d)) { seen.add("D" + d); console.log("  DECISION:", d); }
+  if (s.ask && !seen.has("ASK")) {
+    seen.add("ASK"); console.log("ASK shown");
     await p.screenshot({ path: `/tmp/${TAG}-ask.png` });
-    // fund the chat directly first so the agent has money to spend
-    await p.click(".ws-panel-tabs .ws-tab");           // Wallet tab
-    await p.waitForTimeout(400);
-    const btns = await p.$$(".ws-panel-body .ws-tab");
-    if (btns[1]) await btns[1].click();                 // "Send directly"
-    await p.waitForTimeout(400);
-    await p.fill(".ws-panel-body .ws-field", "3");
-    const send = await p.$(".ws-panel-body .ws-btn-primary");
-    if (send) { await send.click(); console.log("  funded 3 HBAR directly"); }
-    await p.waitForTimeout(9000);
-    // now approve
     const ok = await p.$(".ws-ask .ws-btn-primary");
-    if (ok) { await ok.click(); approved = true; console.log("APPROVED"); }
-    await p.waitForTimeout(2000);
+    if (ok) { await ok.click(); console.log("  approved"); }
   }
   if (s.arts && !seen.has("ART")) {
-    seen.add("ART"); console.log("ARTIFACT:", s.arts);
-    await p.screenshot({ path: `/tmp/${TAG}-artifact.png` });
+    seen.add("ART"); console.log("ARTIFACT shown:", s.arts);
+    await p.click(".ws-artifact");           // open the preview
+    await p.waitForTimeout(2500);
+    await p.screenshot({ path: `/tmp/${TAG}-preview.png` });
+    console.log("  preview open:", await p.evaluate(() => !!document.querySelector(".ws-preview")));
   }
-  if (i % 10 === 0) {
-    await p.screenshot({ path: `/tmp/${TAG}-live.png` });
-    if (s.bal) console.log("  balance", s.bal, s.working ? `| ${s.working}` : "");
-  }
-  if (approved && s.arts > 0 && !s.working) break;
+  if (i % 12 === 0 && s.bal) console.log("  balance", s.bal, s.working ? `| ${s.working}` : "", s.stop ? "| stoppable" : "");
+  if (seen.has("ART") && !s.working && !s.stop) break;
 }
 await p.screenshot({ path: `/tmp/${TAG}-final.png` });
 console.log("done");

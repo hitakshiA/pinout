@@ -58,9 +58,10 @@ function Ledger({ rows }: { rows: LedgerEntry[] }) {
 }
 
 function Money({
-  wallet, onFundDirect, onFundSigned, onWithdraw, busy,
+  wallet, onFundDirect, onFundSigned, onWithdraw, busy, needs,
 }: {
   wallet: Wallet | null;
+  needs: number | null;
   onFundDirect: (tinybar: number) => void;
   onFundSigned: (from: string, tinybar: number) => void;
   onWithdraw: (tinybar: number | undefined, to: string | undefined) => void;
@@ -75,7 +76,15 @@ function Money({
 
   return (
     <div>
-      <div className="ws-balance">{hbar(wallet?.tinybar)}</div>
+      <div className="ws-balance" data-low={needs != null && (wallet?.tinybar ?? 0) < needs}>
+        {hbar(wallet?.tinybar)}
+      </div>
+      {needs != null && (wallet?.tinybar ?? 0) < needs && (
+        <div className="ws-shortfall">
+          The agent is waiting for {hbar(needs)} and cannot continue until the
+          wallet covers it. Short by {hbar(needs - (wallet?.tinybar ?? 0))}.
+        </div>
+      )}
       <div className="ws-balance-sub">
         {wallet?.accountId ? (
           <>
@@ -230,7 +239,8 @@ function Session({ chat }: { chat: Chat | null }) {
 }
 
 export function Panel({
-  chat, wallet, tab, setTab, urlFor, onFundDirect, onFundSigned, onWithdraw, busy, onClose, onOpen,
+  chat, wallet, tab, setTab, urlFor, onFundDirect, onFundSigned, onWithdraw, busy, onClose,
+  onOpen, needs,
 }: {
   onOpen: (a: Asset) => void;
   chat: Chat | null; wallet: Wallet | null;
@@ -239,7 +249,7 @@ export function Panel({
   onFundDirect: (t: number) => void;
   onFundSigned: (from: string, t: number) => void;
   onWithdraw: (t: number | undefined, to: string | undefined) => void;
-  busy: boolean; onClose: () => void;
+  busy: boolean; onClose: () => void; needs: number | null;
 }) {
   return (
     <aside className="ws-panel">
@@ -259,7 +269,7 @@ export function Panel({
       <div className="ws-panel-body">
         {tab === "Wallet" && (
           <Money wallet={wallet} onFundDirect={onFundDirect} onFundSigned={onFundSigned}
-                 onWithdraw={onWithdraw} busy={busy} />
+                 onWithdraw={onWithdraw} busy={busy} needs={needs} />
         )}
         {tab === "Files" && (
           <Files assets={chat?.assets ?? []} artifacts={chat?.artifacts ?? []}

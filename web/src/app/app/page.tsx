@@ -61,6 +61,8 @@ export default function Workspace() {
   const [tab, setTab] = useState("Wallet");
   // an artifact opens a real preview, not a file list
   const [preview, setPreview] = useState<Asset | null>(null);
+  // what the agent is blocked on, so the panel can say so plainly
+  const [needs, setNeeds] = useState<number | null>(null);
 
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<File[]>([]);
@@ -98,6 +100,21 @@ export default function Workspace() {
     ]);
     setChat(c); setWallet(w);
   }, [ws, chatId]);
+
+  /* The balance moves without telling anyone.
+   *
+   * It was refreshed only on discrete events, so the panel showed 3.0000 HBAR
+   * while the agent had spent its way down to 0.4404 and was asking for more.
+   * A number that stale about money is worse than no number: it makes the
+   * agent look like it is stalling when it is waiting for funds it genuinely
+   * needs. While a run is live the wallet is re-read on a timer. */
+  useEffect(() => {
+    if (!ws || !chatId || !running) return;
+    const t = setInterval(() => {
+      api.wallet(ws.id, ws.cap, chatId).then(setWallet).catch(() => {});
+    }, 6000);
+    return () => clearInterval(t);
+  }, [ws, chatId, running]);
 
   /* ---------- load a chat, replaying what it already holds ---------- */
   useEffect(() => {
@@ -249,9 +266,12 @@ export default function Workspace() {
         break;
       }
       case "funding_needed":
+        setNeeds(Number(ev.needTinybar));
+        setPanelOpen(true); setTab("Wallet");
         setWorking({ what: `Waiting for ${hbar(Number(ev.needTinybar))}`, since: Date.now() });
         break;
       case "funded":
+        setNeeds(null);
         setWorking(null);
         setBlocks((b) => [...b, {
           k: "note", id,
@@ -574,7 +594,7 @@ export default function Workspace() {
                    urlFor={(aid) => (ws ? api.fileUrl(ws.id, ws.cap, aid) : "#")}
                    onFundDirect={money.fundDirect} onFundSigned={money.fundSigned}
                    onWithdraw={money.withdraw} busy={busy}
-                   onOpen={(a) => setPreview(a)}
+                   needs={needs} onOpen={(a) => setPreview(a)}
                    onClose={() => setPanelOpen(false)} />
           )}
         </div>

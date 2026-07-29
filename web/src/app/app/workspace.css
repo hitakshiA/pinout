@@ -477,3 +477,12 @@
     box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
   }
 }
+
+/* a wallet that cannot cover what the agent is waiting for */
+.ws-balance[data-low="true"] { color: var(--ws-warn); }
+.ws-shortfall {
+  margin-top: 8px; padding: 9px 11px; border-radius: 9px;
+  border: 1px solid rgba(240, 198, 116, 0.34);
+  background: rgba(240, 198, 116, 0.07);
+  font-size: 12.5px; line-height: 1.55; color: var(--ws-warn);
+}
