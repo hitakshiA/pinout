@@ -624,8 +624,22 @@ export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinyba
       const out = await drive(run, { input: [{ role: "user", content: task }] });
       if (!out.parked) await finish(run);
     } catch (e) {
-      run.say("error", { message: e.message, ...classify(e) });
-      run.setState(RUN_STATE.FAILED, { message: e.message, ...classify(e) });
+      // Say what survived, not just what broke.
+      //
+      // A run that delivered everything asked for and then tripped while
+      // tidying up is not the same event as one that produced nothing, and
+      // reporting both as "failed" makes the good outcome unreadable. The
+      // state stays honest; the artifacts are carried alongside it so a client
+      // can tell the two apart.
+      const delivered = assets.artifactsOf(workspaceId, run.threadId)
+        .map((a) => ({ name: a.name, bytes: a.bytes, sha256: a.sha256 }));
+      run.say("error", { message: e.message, ...classify(e), delivered });
+      run.setState(RUN_STATE.FAILED, {
+        message: e.message, ...classify(e),
+        delivered,
+        deliveredCount: delivered.length,
+        partial: delivered.length > 0,
+      });
       runs.delete(workspaceId);
     }
   })();
@@ -725,7 +739,13 @@ async function finish(run) {
   const w = ws.get(run.workspaceId);
   const left = w?.wallet ? await balanceOf(w.wallet.accountId).catch(() => null) : null;
   run.say("balance", { tinybar: left });
-  run.setState(RUN_STATE.DONE, { remainingTinybar: left, approvals: run.approvals });
+  const delivered = assets.artifactsOf(run.workspaceId, run.threadId)
+    .map((a) => ({ name: a.name, bytes: a.bytes, sha256: a.sha256 }));
+  run.setState(RUN_STATE.DONE, {
+    remainingTinybar: left,
+    remainingHbar: left == null ? null : Number((left / 1e8).toFixed(8)),
+    approvals: run.approvals, delivered, deliveredCount: delivered.length,
+  });
   runs.delete(run.workspaceId);
 }
 

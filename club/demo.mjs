@@ -245,7 +245,14 @@ async function main() {
         break;
       case "state":
         if (ev.state === "done") state.done = true;
-        if (ev.state === "failed") { state.failed = true; state.paused = ev.humanMessage ?? null; }
+        if (ev.state === "failed") {
+          state.failed = true;
+          state.paused = ev.humanMessage ?? null;
+          state.partial = !!ev.partial;
+          if (ev.partial) {
+            console.log(C.money(`  run ended badly but ${ev.deliveredCount} artifact(s) survived`));
+          }
+        }
         break;
       case "error":
         if (ev.recoverable) console.log(C.money(`  PAUSED: ${ev.humanMessage}`));
@@ -303,7 +310,12 @@ async function main() {
 
   const verdict = {
     demo: n, name: demo.name,
+    // two different questions: did the run close cleanly, and did the work
+    // arrive. Collapsing them made a delivered, correct result read as a
+    // failure because the machine was lost while tidying up afterwards.
     finished: state.done && !state.failed,
+    delivered: saved.length > 0 && saved.every((x) => x.intact),
+    partial: !!state.partial,
     topUps, fundedTinybar: fundedTotal,
     artifacts: saved.map((s) => ({ name: s.name, bytes: s.bytes, path: s.path, intact: s.intact })),
   };
