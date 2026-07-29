@@ -55,13 +55,67 @@ await m.release();                                   // unused seconds refunded 
 
 ## How Pinout works
 
-This isn't a hypothesis. Hedera's own x402 documentation says so, under
+### The gap
+
+x402 settles one request at one price. Both sides have to agree the number before the call
+happens. That is exactly right for a fixed-price API, and it stops working the moment the
+price depends on how long the work runs.
+
+Almost everything an agent actually needs is priced that way:
+
+| What the agent buys | Priced by | Known in advance? |
+|---|---|---|
+| a GPU to fine-tune a model | the second | no, depends on convergence |
+| inference from another model | the token | no, depends on the answer |
+| bandwidth or egress | the gigabyte | no, depends on the payload |
+| a data feed or a scraper | the record | no, depends on the corpus |
+| a rate-limited API | the call, in bursts | not for a whole job |
+
+An agent cannot ask for a quote on any of these, because the seller does not have one to
+give. The number exists only after the work is done.
+
+Hedera's own x402 documentation names this limitation directly, under
 [**Requirements and limitations**](https://docs.hedera.com/solutions/ai/x402):
 
 > Settlement is per-request and discrete. x402 is **not built for streaming payments**
 > or multi-hop routing across ledgers.
 >
 > [Hedera docs, x402](https://docs.hedera.com/solutions/ai/x402)
+
+That is a correct reading of the protocol, and it is why Pinout exists. Agent commerce
+that only covers fixed-price requests covers the smallest part of what agents buy. The
+interesting purchases are all metered, and none of them fit in a single 402.
+
+### What Pinout does about it
+
+Pinout does not try to make one payment stretch over time. Settlement stays discrete,
+because that is what the ledger is good at. What Pinout adds is a **session**: a unit of
+purchase that outlives a single request, meters usage off-chain where metering belongs,
+and commits every claim the meter makes to a ledger the seller does not control.
+
+Four moves, and the whole system is these four:
+
+**One payment opens a pool of credits.** The agent pays a 402 the normal way. The credit
+it receives is derived from the transfer that actually settled, so the pool is worth
+exactly what moved on chain.
+
+**A meter burns the pool while the work happens.** One credit is one second held. The
+agent watches it drain over SSE and knows its remaining balance at every tick, which is
+the number it could never get up front.
+
+**Running low does not end the job.** When the pool runs thin the server issues another
+402 against the same session. The agent signs, credits are added, and the machine it
+rented is still running with its files and processes intact. This is the part that makes
+metering usable: a top up is not a new purchase, it is a refill.
+
+**Close returns the remainder.** Unused credits are refunded on chain, and the final
+numbers are anchored to a topic that costs the seller real HBAR to write to. The agent
+pays for what it held and not a second more.
+
+The human sets the ceiling. The agent chooses what to buy inside it, how long to hold it,
+and when to stop.
+
+### The shape on the wire
 
 ```mermaid
 sequenceDiagram
