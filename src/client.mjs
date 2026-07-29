@@ -85,11 +85,51 @@ export class PinoutClient {
     }
 
     const payload = await this.x402.createPaymentPayload(challenge);
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       method,
       headers: { ...headers, "PAYMENT-SIGNATURE": encodePaymentSignatureHeader(payload) },
     });
-    const body = await res.json();
+
+    // A 402 on the RETRY is not an error, it is a fresh challenge, and the
+    // body is empty because the terms live in the header. Reporting it as
+    // "paid request failed 402: {}" told the agent nothing at all, and it
+    // reacted by abandoning a machine it was still holding.
+    //
+    // The usual cause is that the price moved between the quote and the
+    // signature: a top-up is priced from live session state, so a few seconds
+    // of drift is enough. Signing the new terms once is the correct response.
+    // Twice would be a loop, so it is not attempted.
+    if (res.status === 402) {
+      const again = res.headers.get("PAYMENT-REQUIRED");
+      if (again) {
+        const fresh = decodePaymentRequiredHeader(again);
+        const now = Number(fresh.accepts[0].amount);
+        if (now > this.maxPerCall) {
+          throw new BudgetExceededError(
+            `re-quoted at ${now} tinybar, per-call cap is ${this.maxPerCall}`);
+        }
+        if (this.spent + now > this.budget) {
+          throw new BudgetExceededError(
+            `re-quote would spend ${this.spent + now}, budget is ${this.budget}`);
+        }
+        const retryPayload = await this.x402.createPaymentPayload(fresh);
+        res = await fetch(url, {
+          method,
+          headers: { ...headers, "PAYMENT-SIGNATURE": encodePaymentSignatureHeader(retryPayload) },
+        });
+        if (res.status === 402) {
+          throw new Error(
+            `the server re-quoted twice and would not settle. It first asked ${amount} ` +
+            `tinybar, then ${now}. Nothing was charged.`);
+        }
+      } else {
+        throw new Error(
+          "the server answered a signed payment with another 402 and no terms, " +
+          "so there is nothing to sign. Nothing was charged.");
+      }
+    }
+
+    const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`paid request failed ${res.status}: ${JSON.stringify(body)}`);
     this.spent += amount;
 
