@@ -283,7 +283,10 @@ export default function Workspace() {
         setBlocks((b) => [...b, {
           k: "artifact", id, name: String(ev.name), bytes: Number(ev.bytes ?? 0), kind: "Artifact",
         }]);
+        // twice: once now, once after the write has certainly landed, so the
+        // card is clickable the instant it appears
         refreshChat();
+        setTimeout(() => { refreshChat(); }, 1200);
         break;
       case "withdrawn":
         setBlocks((b) => [...b, {
@@ -521,10 +524,26 @@ export default function Workspace() {
                   return (
                     <div className="ws-turn" key={b.id}>
                       <ArtifactCard name={b.name} bytes={b.bytes} kind={b.kind}
-                                    onOpen={() => {
-                                      const a = chat?.artifacts.find((x) => x.name === b.name)
-                                             ?? chat?.assets.find((x) => x.name === b.name);
-                                      if (a) setPreview(a); else { setPanelOpen(true); setTab("Files"); }
+                                    onOpen={async () => {
+                                      // The chat may not have refreshed yet: an
+                                      // artifact appears in the transcript the
+                                      // moment it is delivered, and looking it
+                                      // up in stale state silently did nothing
+                                      // but flip to the file list. Re-read, then
+                                      // fall back to a fetch by name.
+                                      let a = chat?.artifacts.find((x) => x.name === b.name)
+                                           ?? chat?.assets.find((x) => x.name === b.name);
+                                      if (!a && ws && chatId) {
+                                        const fresh = await api.chat(ws.id, ws.cap, chatId)
+                                          .catch(() => null);
+                                        if (fresh) {
+                                          setChat(fresh);
+                                          a = fresh.artifacts.find((x) => x.name === b.name)
+                                           ?? fresh.assets.find((x) => x.name === b.name);
+                                        }
+                                      }
+                                      if (a) setPreview(a);
+                                      else { setPanelOpen(true); setTab("Files"); }
                                     }} />
                     </div>
                   );
