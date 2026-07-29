@@ -10,8 +10,10 @@
 //     top-up must not double-credit.
 //   * At zero the stream PAUSES; it never overdraws. Underflow would be
 //     unbilled delivery.
-//   * Refund is issued only AFTER the HIP-991 settlement anchor lands, and
-//     only once. The anchor is the precondition, not a receipt.
+//   * Refund is issued once, and is NOT gated on the settlement anchor.
+//     Gating it meant an anchor failure stranded the buyer's money; the anchor
+//     gates the SELLER's claim, not the buyer's refund. Anchors are queued and
+//     batched, so the refund normally lands on-chain first.
 //
 // State: OPENING -> ACTIVE <-> PAUSED -> SETTLING -> CLOSED
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
