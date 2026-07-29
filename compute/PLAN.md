@@ -1,7 +1,7 @@
-# Pinout Compute — build plan
+# Pinout Compute build plan
 
 A metered computer an AI agent rents by the second, pays for over x402 on Hedera,
-and gets change back from — with a bill anyone can recompute from public data.
+and gets change back from, with a bill anyone can recompute from public data.
 
 Two lanes: **CPU** (Daytona, $200 credit) and **GPU** (Modal, $30 credit).
 
@@ -13,28 +13,28 @@ All provider rates below are confirmed. No estimated numbers remain.
 
 Everything below was read from the providers' own docs. Anything unverified says so.
 
-### Modal — GPU lane
+### Modal, the GPU lane
 
 **API shape** (`modal.Sandbox`):
 
 ```python
 sb = modal.Sandbox.create(
     app=app, image=img, gpu="T4", cpu=2, memory=8192,
-    timeout=1800,            # DEFAULT IS 300s — long jobs die silently without this
+    timeout=1800,            # DEFAULT IS 300s. Long jobs die silently without this
     idle_timeout=60,         # Modal bills idle GPU containers
     block_network=False,
     outbound_domain_allowlist=[...],   # egress policy for untrusted code
 )
 p = sb.exec("python", "-u", "job.py")
-for line in p.stdout:        # native line iterator — free streaming
+for line in p.stdout:        # native line iterator, free streaming
     tick(line)
 sb.terminate()
 ```
 
-Also available: `Sandbox.from_id()` (reconnect — this is what `attach()` uses),
+Also available: `Sandbox.from_id()` (reconnect, which is what `attach()` uses),
 `snapshot_filesystem()`, `set_tags()` / `Sandbox.list()` for reaping orphans.
 
-**Pricing — verified at modal.com/pricing.** The trap: **Sandbox CPU and memory are
+**Pricing, verified at modal.com/pricing.** The trap: **Sandbox CPU and memory are
 billed at roughly 3× the standard task rate.** Quoting GPU cost alone understates a
 sandbox by ~55%.
 
@@ -51,7 +51,7 @@ Real T4 sandbox = `0.000164 + 0.00003942 (1 core) + 0.00005336 (8 GiB)` ≈
 **Starter plan limits:** $30/mo credit · 100 containers · **10 GPU concurrency** ·
 **1-day log retention** · billing API is Team-tier only.
 
-### Daytona — CPU lane
+### Daytona, the CPU lane
 
 **API shape.** `exec()` and `code_run()` block, so streaming must go through a session:
 
@@ -68,7 +68,7 @@ await sandbox.process.get_session_command_logs_async(
 
 That is a hard constraint on the tick loop, not a style note.
 
-**Billing states — verified:**
+**Billing states, verified:**
 
 | State | vCPU | RAM | Disk |
 | --- | :--: | :--: | :--: |
@@ -80,16 +80,16 @@ That is a hard constraint on the tick loop, not a style note.
 Cold start and shutdown bill at the full rate. **The meter must start when their
 clock starts**, or every refund drifts in the seller's favour.
 
-**Org resource pool (Tier 1):** 10 vCPU / 10 GiB RAM / 30 GiB disk — a ceiling on
+**Org resource pool (Tier 1):** 10 vCPU / 10 GiB RAM / 30 GiB disk, a ceiling on
 concurrent sandboxes, not a per-sandbox limit.
 
-**Pricing — confirmed from the dashboard** (not published in the public docs):
+**Pricing, confirmed from the dashboard** (not published in the public docs):
 
 | Resource | Rate |
 | --- | --- |
 | vCPU | $0.00001400 / s |
 | Memory | $0.00000450 / GiB / s |
-| Storage | $0.00000003 / GiB / s — **first 5 GB free** |
+| Storage | $0.00000003 / GiB / s, **first 5 GB free** |
 | Windows OS surcharge | $0.0000238 / vCPU / s |
 
 So `cpu-small` (1 vCPU, 1 GiB, 3 GiB disk) = `0.000014 + 0.0000045 + 0` =
@@ -101,7 +101,7 @@ plan**, so the lane split stands: Daytona CPU, Modal GPU.
 
 ---
 
-## 2. Budget — GPU is the binding constraint
+## 2. Budget: GPU is the binding constraint
 
 Lane split is fixed: **Daytona = CPU only** (no GPU on this plan), **Modal = GPU only**.
 
@@ -112,7 +112,7 @@ Lane split is fixed: **Daytona = CPU only** (no GPU on this plan), **Modal = GPU
 | `gpu-t4` 2 vCPU / 8 GiB | Modal | $0.000257/s | 411,000 tinybar | **32.5 h** |
 | `gpu-a100-80` 4 vCPU / 16 GiB | Modal | $0.000959/s | 1,533,000 tinybar | **8.7 h** |
 
-CPU is effectively free at this scale — 3,000 hours. **GPU is not, and it does not
+CPU is effectively free at this scale, 3,000 hours. **GPU is not, and it does not
 replenish inside the build window.** 10.8 hours of A100 is roughly one careless
 afternoon.
 
@@ -121,7 +121,7 @@ Rules that follow directly:
 - **`local` adapter is mandatory before either provider.** Every unit test, integration
   run and demo rehearsal uses it. Zero cost, zero cold start, works offline.
 - **CPU is the development lane.** The tick loop, credit burn, checkpointing, refund
-  arithmetic and reconciliation are all provider-agnostic — build and debug them on
+  arithmetic and reconciliation are all provider-agnostic, so build and debug them on
   Daytona, where 3,000 hours means mistakes are free.
 - **GPU is a demo resource, not a development one.** Touch it only to prove the lane
   works and to record.
@@ -130,7 +130,7 @@ Rules that follow directly:
 - **Hard server-side wall-clock cap per session**, lower on GPU lanes than CPU.
 - **Track GPU seconds spent** against the 32.5 h ceiling and refuse new GPU sessions
   past a reserve, so there is always enough left to record the demo.
-- **Reap orphans on boot** via `Sandbox.list()` tags — an abandoned GPU sandbox with
+- **Reap orphans on boot** via `Sandbox.list()` tags. An abandoned GPU sandbox with
   `idle_timeout` unset burns budget silently.
 
 The flagship is designed around this: **CPU-heavy, GPU-brief.** Parsing 5,000 PDFs is
@@ -141,7 +141,7 @@ the workload, so the constraint and the demo agree.
 
 ## 3. The problem that must be solved first
 
-**A HIP-991 settlement anchor costs a flat $0.050** (measured — see
+**A HIP-991 settlement anchor costs a flat $0.050** (measured, see
 [docs/measurements.md](../docs/measurements.md)). Against compute:
 
 | Lane | Anchor equals |
@@ -186,11 +186,11 @@ The adapter fills `buffer`; the tick drains it. Decoupled in both directions.
 ```
 
 The rate card goes inside the **signed offer** (offer-and-receipt already ships), so
-the quote is non-repudiable — a customer can prove what they were promised.
+the quote is non-repudiable, so a customer can prove what they were promised.
 
 ---
 
-## 5. Three-way reconciliation — the moat
+## 5. Three-way reconciliation: the moat
 
 `verify()` shows three numbers that must agree:
 
@@ -201,9 +201,9 @@ the quote is non-repudiable — a customer can prove what they were promised.
 > seller cannot recover. Point the collector at an escrow account if you want the
 > fee itself to change hands.
 
-1. **What we billed** — credits burned, from the HCS ledger
-2. **What the chain says** — replayed from the public mirror node
-3. **What the provider says** — Daytona `get_metrics()` for the same window
+1. **What we billed**: credits burned, from the HCS ledger
+2. **What the chain says**: replayed from the public mirror node
+3. **What the provider says**: Daytona `get_metrics()` for the same window
 
 Modal's billing API is Team-tier only, so the GPU lane is self-instrumented from
 `create`/`terminate` timestamps. **Publish which lane has provider-side corroboration
@@ -217,7 +217,7 @@ a three-party attestation rather than a seller's claim with a timestamp.
 ## 6. Agent surface
 
 ```
-list_compute()                       free — browsing, no payment
+list_compute()                       free, browsing, no payment
 run({code, tier, estimated_seconds, max_budget_tinybar, files?})
                                      402 → settle → provision → returns {session_id, watch_url}
 attach({session_id})                 reconnect (Modal: Sandbox.from_id)
@@ -233,7 +233,7 @@ connection, independent of what the client renders.
 
 ---
 
-## 7. Security — blocking for any public deploy
+## 7. Security: blocking for any public deploy
 
 **Testnet HBAR is free from a faucet.** On a public testnet deployment the payment
 gate provides *zero* economic friction: anyone can mint funds at no cost and run
@@ -241,9 +241,9 @@ arbitrary code on our Modal and Daytona accounts, billed to a real card.
 
 Required before first deploy, pick one:
 
-- **mainnet** for the deployed instance (real HBAR = real friction) — preferred
-- **allowlisted testnet** — x402 flow fully real, payer checked against a list
-- provider spend caps + egress allowlist + hard wall-clock ceilings — necessary in
+- **mainnet** for the deployed instance (real HBAR = real friction), preferred
+- **allowlisted testnet**: x402 flow fully real, payer checked against a list
+- provider spend caps + egress allowlist + hard wall-clock ceilings, necessary in
   all cases, sufficient in none
 
 ---
@@ -253,18 +253,18 @@ Required before first deploy, pick one:
 | Step | Deliverable |
 | --- | --- |
 | 1 | Settlement tiers (batched default / priority paid) |
-| 2 | `local` adapter (subprocess) — tests and rehearsals cost nothing |
+| 2 | `local` adapter (subprocess), so tests and rehearsals cost nothing |
 | 3 | Tick loop, second-based metering, rate card in the signed offer |
 | 4 | `list_compute` + `run` + `status` + `stop` |
 | 5 | Modal adapter (native iterator) + orphan reaping |
 | 6 | Daytona adapter + `get_metrics()` reconciliation |
 | 7 | Provider metrics signed into the receipt |
-| 8 | Front end — catalogue → meter → log → verify, SSE straight to the meter |
+| 8 | Front end: catalogue → meter → log → verify, SSE straight to the meter |
 | 9 | Flagship job: two-phase index build (CPU parse → GPU embed) |
 | 10 | `attach` + `spend_report` |
 | 11 | Abuse controls, `--replay` recording insurance, judge guide |
 
-Cold-agent audit at the end of each step, not only at the finish — that is what
+Cold-agent audit at the end of each step, not only at the finish. That is what
 caught the stranded-money bug, and the surface only grows from here.
 
 ---
@@ -275,25 +275,25 @@ caught the stranded-money bug, and the surface only grows from here.
 | --- | --- |
 | Modal sandbox default timeout is **300 s** | Set `timeout=1800` or long jobs die at 5 minutes |
 | Daytona `exec()` / `code_run()` **block** | Streaming requires `create_session` → `execute_session_command(run_async=True)` → `get_session_command_logs_async` |
-| Daytona **blocking callbacks kill the WebSocket** | Callbacks must be async and must not do work — push to a buffer only |
+| Daytona **blocking callbacks kill the WebSocket** | Callbacks must be async and must not do work, push to a buffer only |
 | Both bill **cold start** | Modal from container allocation incl. image pull; Daytona bills Creating/Starting/Stopping at full rate |
 | Daytona CPU sampler is a **5-second window** | Runs under ~5 s report 0%. Keep metered runs ≥30 s |
 | Modal billing API is **Team-tier only** | Self-instrument the GPU lane; say so |
 | Modal bills **idle GPU containers** | Set `idle_timeout` and terminate deterministically |
-| Modal Starter: **1-day log retention** | Don't rely on provider logs as the audit trail — that's what HCS is for |
+| Modal Starter: **1-day log retention** | Don't rely on provider logs as the audit trail, that's what HCS is for |
 | Neither exposes a **price catalogue API** | `rates.json` is maintained by hand. Every real broker does this; say so |
 | **Arbitrary agent code** | Sandboxed by the providers, but egress policy + wall-clock caps + spend ceilings are ours to set |
 
 ---
 
 > **Pinout Compute gives an agent a computer it rents by the second, pays for with a
-> wallet instead of an account, and gets the change back from — with a bill anyone can
+> wallet instead of an account, and gets the change back from, with a bill anyone can
 > recompute from a public log.**
 
 
 ---
 
-## 10. Measured unit economics — the service is not profitable at demo scale
+## 10. Measured unit economics: the service is not profitable at demo scale
 
 This is the number that matters and it is not flattering.
 
@@ -303,8 +303,8 @@ This is the number that matters and it is not flattering.
 | cpu-small revenue | 30,000 tinybar/s = **0.0003 HBAR/s** |
 | Break-even session length | **~2,450 seconds (41 minutes)** per anchor |
 
-A typical demo session runs 5–10 seconds and earns ~0.0018 HBAR against a
-0.7345 HBAR anchor — the seller loses roughly **400x what it earns**.
+A typical demo session runs 5 to 10 seconds and earns ~0.0018 HBAR against a
+0.7345 HBAR anchor, so the seller loses roughly **400x what it earns**.
 
 Batched settlement (implemented) divides the anchor across every session closed
 in a sweep window, so the cost per session is `0.7345 / N`. With N=2 in testing
@@ -317,7 +317,7 @@ Honest options, none of which are hidden:
    short sessions can carry.
 2. **Longer sessions.** Real compute jobs run minutes, not seconds.
 3. **Priority tier.** `?settlement=priority` makes the buyer pay for their own
-   immediate anchor — the 0.7345 HBAR is then a disclosed line item rather than
+   immediate anchor, where the 0.7345 HBAR is then a disclosed line item rather than
    a loss.
 4. **Anchor less often.** One anchor per hour rather than per sweep, trading
    settlement latency for cost.

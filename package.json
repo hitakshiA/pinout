@@ -31,7 +31,7 @@
     "check-config": "node -e \"import('./src/config.mjs').then(m=>{m.requireConfig();console.log('config OK')})\""
   },
   "version": "0.1.0",
-  "description": "Prepaid metered streaming credits over x402 on Hedera",
+  "description": "Rent real machines by the second, paid over x402 on Hedera, refunded for every second you don't use.",
   "license": "MIT",
   "author": "Hitakshi Arora (@hitakshiA)",
   "repository": {

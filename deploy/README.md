@@ -15,7 +15,7 @@ The script provisions a `Standard_B2s` Ubuntu 22.04 VM, opens the service port,
 installs Node 20, uploads the source (secrets excluded), copies `.env`
 separately, and runs the server under systemd with `Restart=always`.
 
-The VM is deliberately small — it only brokers payments and meters. All heavy
+The VM is deliberately small. It only brokers payments and meters. All heavy
 compute runs on Daytona and Modal, so the host needs no CPU or GPU of its own.
 
 ## Live deployment
@@ -25,8 +25,7 @@ http://20.1.144.110:4021          Standard_D2alds_v7 (2 vCPU / 4 GiB), eastus2, 
 ```
 
 **Capacity note:** `Standard_B2s` is capacity-restricted on this subscription in
-eastus, westus2 and centralus (`SkuNotAvailable`). Quota was not the problem —
-0 of 65 vCPUs used. The script now defaults to `Standard_D2alds_v7` in eastus2,
+eastus, westus2 and centralus (`SkuNotAvailable`). Quota was not the problem, with 0 of 65 vCPUs used. The script now defaults to `Standard_D2alds_v7` in eastus2,
 picked by enumerating unrestricted SKUs. If that fails, list what is actually
 available rather than guessing:
 

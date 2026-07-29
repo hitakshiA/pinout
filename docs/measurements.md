@@ -1,4 +1,4 @@
-# Phase 0 findings — measured on Hedera testnet, 2026-07-28
+# Phase 0 findings, measured on Hedera testnet, 2026-07-28
 
 Everything here is measured, not quoted. Every number has a transaction behind it.
 Exchange rate at time of measurement: **$0.068801 / HBAR** (network-reported via
@@ -18,26 +18,26 @@ Two live settlements, one per facilitator, identical structure.
 Transfer list on both:
 
 ```
-0.0.9795418  -100000    buyer   — exactly the price, nothing else
+0.0.9795418  -100000    buyer   (exactly the price, nothing else)
 0.0.9795817  +100000    seller
-0.0.9185802  -290693    facilitator — the ENTIRE network fee
+0.0.9185802  -290693    facilitator (the ENTIRE network fee)
 0.0.802      +290693    fee collection
 ```
 
 **The buyer paid zero network fees.** Its balance fell by exactly the purchase
 amount and nothing else; the facilitator absorbed all 290,693 tinybar ($0.00020)
-of network cost. This is Hedera's fee-payer model — what Vybe built custom relayer
+of network cost. This is Hedera's fee-payer model, what Vybe built custom relayer
 infrastructure for, obtained from one `extra.feePayer` field.
 
 Stated precisely, because an earlier draft of this claim was wrong: the buyer
 pays **zero network fee**, not zero HBAR. In an HBAR-denominated system the buyer
-obviously spends HBAR — that is the payment. The "wallet needs no gas token"
+obviously spends HBAR, since that is the payment. The "wallet needs no gas token"
 framing is a USDC-era argument and does not survive the HBAR-only decision. What
 survives, and is worth more, is that the buyer needs **no fee headroom**: it can
 hold exactly the purchase amount and transact.
 
 **Both facilitators charged an identical 290,693 tinybar** and produced identical
-transfer structures. This is **one trial each**, not a load test — sufficient to
+transfer structures. This is **one trial each**, not a load test, sufficient to
 show `feePayer` resolution and fee-payer semantics are equivalent, insufficient to
 claim interchangeability under concurrency. Repeated/rapid payment behaviour
 remains untested. `feePayer` is resolved from `/supported` at boot and never
@@ -48,12 +48,12 @@ hardcoded, which matters because the two values differ.
 An account auto-created via EVM alias has `key: null` on the ledger until it
 signs something. The facilitator verifies the payer via `AccountInfoQuery`
 (scheme rule 6), so an unhydrated account fails as
-`invalid_exact_hedera_payload_signature_invalid` — an error that looks like a
+`invalid_exact_hedera_payload_signature_invalid`, an error that looks like a
 client signing bug and is not.
 
 Fixed by one self-paid transaction (`scripts/hydrate-key.mjs`). Role accounts
 created with `AccountCreateTransaction().setECDSAKeyWithAlias()` publish their
-key immediately and never enter the hollow state — that is the better path.
+key immediately and never enter the hollow state, which is the better path.
 
 ## 3. HIP-991 topic creation costs 29.36 HBAR ($2.02)
 
@@ -64,8 +64,8 @@ The SDK's default max transaction fee is far below this, so the failure mode is
 `INSUFFICIENT_TX_FEE` (status 9) with no indication that the cause is the custom-fee
 machinery. Requires an explicit `.setMaxTransactionFee(new Hbar(40))`.
 
-This is a one-time per-topic cost, but it means topics cannot be created casually
-— no topic-per-session designs.
+This is a one-time per-topic cost, but it means topics cannot be created casually.
+No topic-per-session designs.
 
 ## 4. The load-bearing finding: HIP-991 imposes a flat ~$0.050 surcharge per message
 
@@ -87,13 +87,13 @@ Two independent invariances, both verified:
   72,673,361 network charge both times.
 
 So attaching any custom fee to a topic costs the submitter a fixed
-**0.7267 HBAR ≈ $0.050** in network fees — **62× a plain-topic submit** — on top of
+**0.7267 HBAR ≈ $0.050** in network fees, **62x a plain-topic submit**, on top of
 the custom fee itself.
 
 The custom fee is a rounding error next to the surcharge. At the live 100,000-tinybar
 schedule the custom fee is **0.14%** of the seller's total cost
 (100,000 / 72,773,361); even at the 10,000,000-tinybar test schedule it is only 12.1%.
-The seller is overwhelmingly paying the network, not the buyer — which is precisely
+The seller is overwhelmingly paying the network, not the buyer, which is precisely
 why this rail cannot carry high-frequency writes.
 
 This is almost certainly why the earlier scan found **0 of 100 recent testnet
@@ -104,7 +104,7 @@ for high-frequency writes.
 
 The original plan checkpoints every N events to a HIP-991 topic. At $0.050 per
 checkpoint that is economically broken for micropayments. Realistic LLM token
-pricing is ~$0.000001–0.000015 per token; a checkpoint would need to cover
+pricing is ~$0.000001 to 0.000015 per token; a checkpoint would need to cover
 ~50,000 tokens just to reach 10% overhead, which makes the meter far too coarse
 to be a meter.
 
@@ -115,12 +115,12 @@ to be a meter.
 | **Burn ledger** | plain HCS topic `0.0.9795896` | every N events | $0.0008 | fine-grained consumption checkpoints; `running_hash` + `sequence_number` tamper-evidence |
 | **Settlement anchor** | HIP-991 topic `0.0.9795865` | batched, rare | $0.050 | costs the seller ~0.7345 HBAR in irrecoverable network fees; the custom fee goes to a FIXED collector, not the paying buyer |
 
-Both tiers are HCS. **No smart contract anywhere** — the central architectural
+Both tiers are HCS. **No smart contract anywhere**, the central architectural
 claim survives intact. HIP-991 still does real work at the layer where its cost
 is amortizable, and the reason it sits there rather than on every checkpoint is
 now a measured fact rather than a guess.
 
-This also answers open question #1 of x402 issue #2273 verbatim — *"synchronous
+This also answers open question #1 of x402 issue #2273 verbatim, *"synchronous
 on-chain refund on close vs. signed receipt + batched settlement?"* The measured
 answer is **batched settlement**, and the measurement is why.
 
@@ -138,14 +138,14 @@ Live from `GET /api/v1/topics/0.0.9795865`:
 
 - `collector_account_id` is a **fixed account chosen at topic creation**. On this
   deployment it is the operator's own treasury, which happens to be the buyer in
-  our own tests — so the "seller pays the party it would defraud" framing held
+  our own tests, so the "seller pays the party it would defraud" framing held
   only because buyer and collector were the same account. **For a third-party
   buyer it is a self-payment.** An independent audit caught this; the claim has
   been corrected everywhere. The real, unconditional incentive is the
   **~0.7345 HBAR network fee** the seller cannot recover, whoever collects the
   custom fee.
 - `denominating_token_id: null` confirms HBAR denomination.
-- `fee_exempt_key_list` empty — the seller is deliberately **not** exempt.
+- `fee_exempt_key_list` empty, so the seller is deliberately **not** exempt.
 - The fee schedule was successfully updated three times, proving the key is live
   and that omitting it at creation would have frozen the terms permanently.
 
@@ -158,14 +158,14 @@ anything or trusting the seller.
 
 | Role | Account | Notes |
 | --- | --- | --- |
-| Treasury (also the buyer in our own tests) | `0.0.9795418` | ECDSA, hydrated; the FIXED HIP-991 fee collector — a third-party buyer receives nothing from it |
+| Treasury (also the buyer in our own tests) | `0.0.9795418` | ECDSA, hydrated; the FIXED HIP-991 fee collector, and a third-party buyer receives nothing from it |
 | Seller | `0.0.9795817` | ECDSA, key published at creation |
 | Burn ledger topic | `0.0.9795896` | plain HCS |
 | Settlement anchor topic | `0.0.9795865` | HIP-991; custom fee → fixed collector `0.0.9795418`, NOT the paying buyer |
 
 ---
 
-# Phase 1–4 — the working system, verified on-chain
+# Phases 1 to 4: the working system, verified on-chain
 
 ## 6. Full session lifecycle runs end to end
 
@@ -199,8 +199,8 @@ verifier, reading only the public mirror node:
 5. checkpoint commitments  FAIL  11/11 do not match
 ```
 
-Checks 1–3 **passing while the seller cheats** is the point, not a defect. The
-ledger really is internally consistent and immutable — that is what HCS
+Checks 1 to 3 **passing while the seller cheats** is the point, not a defect. The
+ledger really is internally consistent and immutable, which is what HCS
 guarantees, and it is all it guarantees. Only comparison against the buyer's own
 record exposes fabrication. This is the claimed trust boundary, demonstrated.
 
@@ -218,8 +218,8 @@ transaction **receipt** instead. The verifier caught this on its first run.
 both pass the `state === "CLOSED"` guard, both write an anchor, and both refund.
 Fixed with a promise lock in `settleSession()`.
 
-**Verifier rubber-stamp.** When the buyer's event log was missing, checks 4–5 were
-skipped and it still printed PASSED — meaning a cheating seller passed whenever
+**Verifier rubber-stamp.** When the buyer's event log was missing, checks 4 and 5 were
+skipped and it still printed PASSED, meaning a cheating seller passed whenever
 the client record was absent. Now returns **INCONCLUSIVE** (exit 2) and says so.
 
 ## 9. MCP server: paid tools for agents
@@ -230,8 +230,8 @@ by a real MCP client, an agent autonomously paid 400,000 tinybar, streamed 300
 events, settled, and reported its own spend against a budget.
 
 This is what [`hedera-agent-kit-js#1007`](https://github.com/hashgraph/hedera-agent-kit-js/issues/1007)
-asks for — *"x402 middleware wired to an MCP server — tool calls are blocked until
-a confirmed HBAR micropayment is received"* — and what
+asks for, *"x402 middleware wired to an MCP server, tool calls are blocked until
+a confirmed HBAR micropayment is received"*, and what
 [#894](https://github.com/hashgraph/hedera-agent-kit-js/issues/894) asks for in
 *"an HCS audit-log example for accepted paid tool calls"* and *"a Mirror Node
 receipt verifier helper"*. Both issues are open and unanswered.
@@ -239,7 +239,7 @@ receipt verifier helper"*. Both issues are open and unanswered.
 Spend guards (`maxPerCallTinybar`, `budgetTinybar`) reject a challenge **before any
 signature exists**, so a mispriced or injected 402 cannot put funds at risk.
 
-## 10. Phase 3 — signed offers and receipts (x402 `offer-and-receipt`, JWS profile)
+## 10. Phase 3: signed offers and receipts (x402 `offer-and-receipt`, JWS profile)
 
 The extension defines two artifacts and two formats. `eip712` hardcodes an EVM
 address for `payTo` and fits Hedera badly; the **JWS profile** is format-agnostic
@@ -249,7 +249,7 @@ One finding worth recording: **`@hiero-ledger/sdk`'s `PrivateKey.sign()` is not
 RFC 7515 compatible.** It returns a correctly shaped 64-byte r||s, but probing
 shows the signature verifies against neither plain SHA-256 nor Keccak-256 of the
 message, so a standard JWS verifier rejects it. Signing is therefore done
-explicitly — SHA-256 over the JWS signing input, secp256k1, low-s normalised.
+explicitly: SHA-256 over the JWS signing input, secp256k1, low-s normalised.
 Anyone can now verify a Pinout receipt with an off-the-shelf JWS library, which
 is the entire point of a signed receipt.
 
@@ -268,7 +268,7 @@ Each was reachable and each moved real funds the wrong way.
 | --- | --- | --- |
 | Unserialized close | two concurrent closes → **two refunds** for one session | promise lock in `settleSession()` |
 | CLOSED session kept its credit balance | buyer closes, takes the refund, **keeps streaming for free** | `burn()` checks state before balance; `credits` zeroed on close |
-| Top-up challenged a CLOSED session | server issued a 402 for a dead session — buyer pays **on-chain for nothing** | reject with 409 *before* the challenge is issued |
+| Top-up challenged a CLOSED session | server issued a 402 for a dead session, so the buyer pays **on-chain for nothing** | reject with 409 *before* the challenge is issued |
 | Concurrent streams on one session | interleaved burns, overlapping checkpoint ranges the verifier would reject | one-stream-per-session guard |
 | Persistence was write-only | restart stranded credits the buyer had paid for | rehydrate open sessions on boot |
 | Burn state only saved at open/close | a crash mid-stream lost every burn since session start | save at each checkpoint |
@@ -284,14 +284,14 @@ credits on CLOSED  : 0 (zeroed)
 
 **Crash-recovery bound.** Burn state is durable to the last checkpoint, so a
 crash loses at most `CHECKPOINT_EVERY` events. Measured: before restart
-`credits 1400 / burned 600`, after `credits 1500 / burned 500` — 100 events lost
+`credits 1400 / burned 600`, after `credits 1500 / burned 500`, so 100 events lost
 out of a 250 interval. The loss falls on the **seller**; a crash can never bill
 the buyer for events it did not receive. That asymmetry is deliberate.
 
 ## 12. Migrating to the official x402 server stack found bugs the hand-rolled path hid
 
 Originally the **client** used the official `@x402/hedera/exact/client` while the
-**server** side was hand-rolled — an asymmetry a Hedera reviewer would spot.
+**server** side was hand-rolled, an asymmetry a Hedera reviewer would spot.
 Ported to `@x402/hedera/exact/server` + `@x402/hono`, and bumped 2.19.0 → 2.20.0.
 
 Three things only surfaced because the official code validates what we asserted:
@@ -305,7 +305,7 @@ declarations.
 **The official ordering is safer than ours.** `@x402/hono` verifies **before** the
 handler and settles **after** it succeeds, cancelling the payment if the handler
 throws or returns ≥400. We settled first, so a failure after settlement would
-have charged the buyer for nothing. We now inherit the safer ordering — and the
+have charged the buyer for nothing. We now inherit the safer ordering, and the
 settlement tx id consequently arrives in the `PAYMENT-RESPONSE` header rather
 than being available inside the handler.
 
@@ -316,8 +316,8 @@ been wiring it by hand.
 The port also caught a bug of ours in flight: `extractTransactionFromPayload`
 takes the **inner** payload (`{transaction}`), not the whole `PaymentPayload`
 envelope. Passing the wrong shape threw, the handler 500'd, and the middleware
-correctly **cancelled the payment instead of charging for a failed request** —
-the safety property firing on a genuine mistake.
+correctly **cancelled the payment instead of charging for a failed request**, which
+is the safety property firing on a genuine mistake.
 
 Idempotency now keys on a hash of the signed payment itself rather than the
 settlement tx id (which does not exist at handler time under settle-after-
@@ -344,7 +344,7 @@ Everything below was run against the deployed service with a third-party wallet
 paying real testnet HBAR. Earlier testing had only ever used trivial jobs, which
 is why several of these faults survived five audits.
 
-### Daytona `cpu-4` — 4M rows, files on disk
+### Daytona `cpu-4`: 4M rows, files on disk
 
 | | |
 |---|---|
@@ -356,14 +356,14 @@ is why several of these faults survived five audits.
 | money | 4,410,000 consumed + 13,230,000 refunded = 17,640,000 paid, exact |
 
 Sandbox reality: Python 3.11.15, 3.2 GB disk, working pip, 7 ms to pypi.
-`os.cpu_count()` reports **64** — the host's cores, not the lane's quota, so a
+`os.cpu_count()` reports **64**, the host's cores, not the lane's quota, so a
 job that sizes a thread pool from it will oversubscribe.
 
 Egress is filtered. Reachable: pypi, huggingface.co. Blocked: CloudFront
 (connection reset). A job that downloads its input cannot assume the open
 internet.
 
-### Modal `gpu-t4` — real training
+### Modal `gpu-t4`: real training
 
 Tesla T4, 15.6 GB, 40 SMs, cc7.5, torch 2.4.1+cu121.
 
@@ -388,7 +388,7 @@ NVIDIA A100 80 GB: 32.3 TFLOP/s at 4096², **123.8 TFLOP/s** at 8192² (tf32).
 This lane was called `gpu-a100-40`. Modal returns an 80 GB A100 for both `A100`
 and `A100-40GB` on this account, so the lane advertised and priced a card it
 could not deliver. Renamed to what actually provisions, and its cost basis is
-now marked **unverified** — Modal's billing API is Team-tier only, so the figure
+now marked **unverified**, because Modal's billing API is Team-tier only, so the figure
 is arithmetic on published rates, not a measurement.
 
 ### Getting results out
@@ -407,11 +407,11 @@ byte-for-byte with a matching sha256, on both providers.
 A session used to be handed one script at provision time, and that was the whole
 relationship: no way to look at a result and decide what to do next, no way to
 give the machine an input, no way to take an artifact away. That is a batch job,
-not a rented machine — and for an agent it is close to useless, because an agent
+not a rented machine, and for an agent it is close to useless, because an agent
 works by looking at what happened and choosing the next step.
 
 `hold=1` on the stream rents an idle machine and keeps it up for the seconds
-bought. The stream is the rental clock — it is still what bills per second and
+bought. The stream is the rental clock, still what bills per second and
 what the burn ledger records, so all the existing metering and on-chain
 verification applies unchanged. Against that held machine:
 
@@ -426,7 +426,7 @@ None of these is separately priced; they act on a machine already being billed
 by the second. All are refused with 402 when credits hit zero, or a paused
 session would be free compute.
 
-Verified on both real providers — upload 14,580 B, exec reads it and writes
+Verified on both real providers: upload 14,580 B, exec reads it and writes
 state, a **separate** exec reads that state back, download a 1 MB artifact with
 sha verified in transit, exit codes propagated, money balancing exactly:
 
@@ -439,14 +439,14 @@ sha verified in transit, exit codes propagated, money balancing exactly:
 
 Two provider-specific faults had to be fixed to get there. On Daytona the
 keep-alive occupied the shell session, and Daytona runs a session's commands in
-order — so an exec issued later queued behind an infinite sleep and never ran,
+order, so an exec issued later queued behind an infinite sleep and never ran,
 surfacing to the caller as a bare "fetch failed" while the rental kept billing.
 Hold mode now leaves the session empty and reads liveness from the sandbox. On
 Modal, `filesystem` is a getter, not a method.
 
 **You pay for thinking time.** An agent that rents a machine and then deliberates
 between steps is billed for those seconds. In the end-to-end agent run, 86
-seconds were billed for work whose compute was a few seconds — the rest was the
+seconds were billed for work whose compute was a few seconds, and the rest was the
 model composing its next step. Generate inputs and decide the plan BEFORE
 renting; the one-shot `run_compute` remains the cheaper choice when the work is
 a single known script.

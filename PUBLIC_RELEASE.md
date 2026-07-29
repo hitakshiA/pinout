@@ -1,6 +1,6 @@
 # Public release readiness
 
-**Live:** `http://20.1.144.110:4021` — Azure `Standard_D2alds_v7`, eastus2, systemd `Restart=always`.
+**Live:** `http://20.1.144.110:4021` on Azure `Standard_D2alds_v7`, eastus2, systemd `Restart=always`.
 
 ## What a stranger can do right now
 
@@ -12,7 +12,7 @@ curl -X POST http://20.1.144.110:4021/compute/cpu-small # 402 with a signed offe
 Pay the 402 with any funded Hedera **testnet** ECDSA account, rent a real
 Daytona sandbox, run arbitrary Python billed per second, and get refunded for
 seconds you did not hold. Then recompute the bill yourself from the public
-mirror node — the seller is not trusted at any point.
+mirror node. The seller is not trusted at any point.
 
 ## Guards in front of arbitrary code execution
 
@@ -38,7 +38,7 @@ That is the central operational risk and it is handled explicitly, not implied:
 | Fee-payer model | buyer pays **zero network fees**; needs no fee headroom |
 | HCS plain topic `0.0.9795896` | burn ledger, one checkpoint per N units |
 | HCS `running_hash` + `sequence_number` | tamper evidence computed by consensus, not by the seller |
-| HIP-991 topic `0.0.9795865` | settlement anchor. Writing one costs the seller **~0.7345 HBAR in network fees** — that irrecoverable cost is the incentive against over-reporting. The topic's custom fee goes to a **fixed collector set at topic creation** (here, the operator's treasury), so it is *not* a payment to the buyer. See below. |
+| HIP-991 topic `0.0.9795865` | settlement anchor. Writing one costs the seller **~0.7345 HBAR in network fees**, and that irrecoverable cost is the incentive against over-reporting. The topic's custom fee goes to a **fixed collector set at topic creation** (here, the operator's treasury), so it is *not* a payment to the buyer. See below. |
 | `fee_schedule_key` | present, so fee terms are publicly readable and provably mutable-by-named-key |
 | Mirror node | free public verification; the buyer trusts nothing else |
 | ECDSA secp256k1 | required; ED25519 fails silently in EVM-adjacent tooling |
@@ -60,10 +60,10 @@ That is the central operational risk and it is handled explicitly, not implied:
 anchor costs the seller **~0.7345 HBAR in irrecoverable network fees** (measured).
 That cost is the incentive: publishing your final numbers is expensive, so
 over-reporting is expensive. The topic's HIP-991 custom fee (100,000 tinybar) is
-paid to a **fixed collector account set at topic creation** — on this deployment
+paid to a **fixed collector account set at topic creation**. On this deployment
 that is the operator's own treasury, so for a third-party buyer it is a
 self-payment and carries no auditor semantics. The collector is fixed when the topic is CREATED and can only be changed with
-the topic's `fee_schedule_key` — there is no runtime setting for it. (An
+the topic's `fee_schedule_key`, and there is no runtime setting for it. (An
 `ANCHOR_FEE_COLLECTOR` env var exists but is inert: it is echoed in API output
 and wired to nothing on-chain. Do not rely on it.) The
 network fee is the part that bites regardless of who collects.
@@ -80,12 +80,12 @@ HBAR is free, so an attacker's cost is zero and the seller's is real.
 
 What limits it today:
 
-- **Batched settlement** — one anchor covers every session closed in a sweep
+- **Batched settlement**: one anchor covers every session closed in a sweep
   window, so the per-session anchor share falls as volume rises.
-- **Solvency admission** — new sessions are refused with 503 when the operator
+- **Solvency admission**: new sessions are refused with 503 when the operator
   cannot afford an anchor per open session. It protects buyers from stranded
   balances; it does not stop the drain.
-- **Concurrency caps** — 8 sessions, 1 GPU.
+- **Concurrency caps**: 8 sessions, 1 GPU.
 
 What would actually remove it, none of which is implemented:
 

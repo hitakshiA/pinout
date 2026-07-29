@@ -1,13 +1,13 @@
 # Pinout Compute
 
 A metered computer an AI agent rents **by the second**, pays for over x402 on Hedera,
-and gets change back from — with a bill anyone can recompute from public data.
+and gets change back from, with a bill anyone can recompute from public data.
 
 Two lanes: **CPU** (Daytona) and **GPU** (Modal). The agent picks the lane the job needs.
 
 ## Why this is a product, not a demo
 
-The agent submits **arbitrary code**. `run(code, tier)` — the agent decides what to
+The agent submits **arbitrary code**. `run(code, tier)`, so the agent decides what to
 execute. That is the difference between a metering layer and a metering demo.
 
 It also fills a documented hole:
@@ -36,7 +36,7 @@ starting.**
 | Backtest a strategy | CPU | unbounded sweeps; agent stops early when results are bad |
 
 The flagship is the two-phase index build because **the burn rate visibly changes when
-the agent switches lanes** — cheap ticks, then expensive ticks. That happens naturally
+the agent switches lanes**: cheap ticks, then expensive ticks. That happens naturally
 rather than being staged.
 
 ## Status
@@ -45,10 +45,10 @@ rather than being staged.
 per-second metering, real sandboxes on Daytona (CPU) and Modal (GPU), refunds
 for unheld seconds, and independent bill verification from the public mirror node.
 
-- [PLAN.md](./PLAN.md) — verified provider APIs and pricing, budget, build order, gotchas
-- [rates.json](./rates.json) — rate card. `cpu-small` is flagged `_costVerified: false`
+- [PLAN.md](./PLAN.md): verified provider APIs and pricing, budget, build order, gotchas
+- [rates.json](./rates.json): rate card. `cpu-small` is flagged `_costVerified: false`
   because Daytona does not publish per-resource container rates
-- [adapters/interface.mjs](./adapters/interface.mjs) — the one interface, three implementations
+- [adapters/interface.mjs](./adapters/interface.mjs): the one interface, three implementations
 
 Built on the metering core in [`../src`](../src): x402 payment gate, HCS burn ledger,
 HIP-991 settlement anchor, standalone verifier.
