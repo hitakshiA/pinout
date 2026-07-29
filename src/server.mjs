@@ -472,6 +472,27 @@ app.use("/compute/:lane", async (c, next) => {
   await next();
 });
 
+// Everything that can make a top-up impossible is checked BEFORE the payment
+// gate. Otherwise the server issues a 402 for a session that is already closed,
+// the buyer signs a real transaction, and only then gets a 409 — asking someone
+// to sign a payment that cannot possibly succeed. Same rule as admission
+// control on /compute/:lane: never quote a price for work we will not do.
+app.use("/topup/:lane/:id", async (c, next) => {
+  const lane = c.req.param("lane");
+  if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}`, lanes: Object.keys(LANES) }, 404);
+  const s = sessions.get(c.req.param("id"));
+  if (!s) return c.json({ error: "no such session" }, 404);
+  const auth = c.req.header("Authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.query("token");
+  if (!s.authorise(token)) return c.json({ error: "unauthorized" }, 401);
+  if (s.lane !== lane) return c.json({ error: `session is lane ${s.lane}, not ${lane}` }, 400);
+  if (s.state === "CLOSED" || s.state === "SETTLING") {
+    return c.json({ error: `session is ${s.state}; cannot top up`,
+                    detail: "no payment was requested — open a new session" }, 409);
+  }
+  await next();
+});
+
 app.use("*", paymentMiddleware(routes, resourceServer));
 
 // Discovery: the bazaar extension declares the shape, this endpoint makes it
@@ -765,6 +786,19 @@ app.get("/session/:id/stream", (c) => {
         await stream.writeSSE({ event: "SessionTerminate", data: JSON.stringify({
           type: "SessionTerminate", session: s.id, cause: CAUSE.BALANCE_EXHAUSTED,
           note: ev.note, creditsRemaining: s.credits }) });
+        break;
+      }
+      // A session closed mid-stream (buyer gave up, or closed while paused)
+      // must release the machine NOW. Letting the loop sit out the rest of the
+      // grace window bills the SELLER for up to 90s of idle machine on every
+      // abandoned session.
+      // Terminal states ONLY. The session is legitimately PAUSED while awaiting
+      // a top-up and OPENING/ACTIVE the rest of the time — there is no "OPEN"
+      // state, so testing for one here terminated every stream on its first event.
+      if (s.state === "CLOSED" || s.state === "SETTLING") {
+        await stream.writeSSE({ event: "SessionTerminate", data: JSON.stringify({
+          type: "SessionTerminate", session: s.id, cause: CAUSE.CLIENT_DISCONNECT,
+          note: "session closed — machine released" }) });
         break;
       }
       if (ev.waiting) {
