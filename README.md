@@ -9,27 +9,15 @@
 [![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
 
-x402 lets an agent pay for a request with a known price. Most of what an agent needs
-isn't priced that way: compute is charged by the second, inference by the token,
-bandwidth and data feeds by the unit. Neither side knows the total before the work runs.
+x402 pays for a request at a price you already know. Compute is charged by the second and
+inference by the token, so nobody knows the total until the work has run.
 
-**Pinout extends x402 from fixed-price requests to metered sessions.** One payment opens
-a pool of credits, a meter burns them as work happens, the agent tops up mid-session
-without losing its work, and every unused credit is refunded on-chain. The human sets a
-spending ceiling. The agent decides what to buy, how long to hold it, and when to stop.
+**Pinout turns one payment into a metered session.** Credits burn as the work happens, the
+agent tops up without losing state, and the remainder is refunded on-chain. You set the
+ceiling; the agent decides what to buy inside it.
 
-**It is built on Hedera specifically, and it would not work anywhere else.** Consumption is
-checkpointed to a [Hedera Consensus Service](https://docs.hedera.com/hedera/core-concepts/consensus-service)
-topic whose `running_hash` is maintained by the network, so the seller cannot restate a
-bill it already published. Settlement is anchored to a [HIP-991](https://hips.hedera.com/hip/hip-991)
-fee-charging topic that costs the seller real, unrecoverable HBAR to write, which makes
-over-reporting expensive by construction. The agent pays **zero network fees** thanks to
-Hedera's fee-payer model, so it holds exactly what it means to spend. And the whole bill is
-recomputable by anyone from the free public mirror node. There is **no smart contract in
-this system** at all.
-
-**[Pinout Compute](#pinout-compute)** is the first service built on it: CPU and NVIDIA
-GPU machines an agent rents by the second.
+**[Pinout Compute](#pinout-compute)** is the first service on it. Agents rent CPU and NVIDIA
+GPU machines by the second, from a T4 up to a B300.
 
 </div>
 
@@ -122,84 +110,63 @@ it lands.
 
 ## Why Hedera
 
-Four platform properties carry this design. Each one is load-bearing, and each fails
-somewhere else.
+Four properties carry this design. Take any one away and it stops working.
 
-### 1. The agent pays no network fees
+### The agent pays no network fees
 
-In Hedera's `exact` scheme the facilitator signs as fee payer and submits on the agent's
-behalf. Measured on a real payment:
+In Hedera's `exact` scheme the facilitator signs as fee payer. Measured on a real payment:
 
-| Account | Balance change | |
+| Account | Change | |
 |---|---:|---|
-| agent (buyer) | `-100,000` tinybar | exactly the price, nothing else |
+| agent | `-100,000` tinybar | exactly the price |
 | seller | `+100,000` tinybar | |
-| facilitator | `-290,693` tinybar | **the entire network fee** |
+| facilitator | `-290,693` tinybar | **the whole network fee** |
 
-The agent's balance moves by the price and not one tinybar more. It never holds a gas
-float, never monitors one, and never tops one up. On a chain where the payer funds its own
-gas, every agent needs a second balance that somebody has to keep alive, and an agent that
-runs dry mid-session fails for a reason that has nothing to do with the work.
+The agent never holds a gas float for someone to keep alive. Where the payer funds its own
+gas, every agent needs a second balance that can run dry for reasons unrelated to the work.
 
-### 2. The ledger is chained by the network, not by the seller
+### The network keeps the ledger, not the seller
 
 Consumption checkpoints go to a plain HCS topic. Hedera assigns each message a
 `sequence_number` and maintains a `running_hash` across the topic, computed by consensus
-nodes. The party being audited is not the party computing the audit chain, so a seller
-cannot quietly rewrite usage it already published.
+nodes. The party being audited is not the party computing the audit chain.
 
-The settlement anchor then commits to the final `sequence_number` **and** that
-`running_hash`, which freezes the entire consumption history behind one record.
+The settlement anchor then commits to that final sequence number **and** running hash,
+freezing the history behind one record.
 
-### 3. A log that costs money to write
+### Writing the receipt costs us money
 
-The settlement anchor goes to a HIP-991 fee-charging topic, costing the seller about
-**0.7345 HBAR per write in irrecoverable network fees**. That is not overhead to minimise,
-it is the incentive: publishing your final numbers is expensive, so inflating them is
-expensive.
+Settlement lands on a HIP-991 fee-charging topic at about **0.7345 HBAR per write**,
+unrecoverable. That is the incentive, not overhead: publishing final numbers is expensive,
+so inflating them is expensive.
 
-Measured, and it shaped the architecture:
+| Payload | Plain topic | HIP-991 topic |
+|--------:|------------:|--------------:|
+|   100 B |    $0.00017 |  **$0.0500** |
+| 1,000 B |    $0.00078 |  **$0.0500** |
+| 4,000 B |    $0.00080 |  **$0.0500** |
 
-| Payload | Plain HCS topic | HIP-991 topic |
-|--------:|----------------:|--------------:|
-|   100 B |       $0.00017  |    **$0.0500** |
-| 1,000 B |       $0.00078  |    **$0.0500** |
-| 4,000 B |       $0.00080  |    **$0.0500** |
+Flat ~$0.050 whatever the payload *and* whatever the fee amount, about **62x** a plain
+topic. Hence two tiers: cheap checkpoints during the session, one expensive anchor at the
+end. No EVM chain charges for a log write unless you deploy a contract to do it.
 
-A fee-charging message costs a flat ~$0.050 regardless of payload size *and* regardless of
-the fee amount, about **62x** a plain topic. That is why the meter is two tiers rather than
-one: cheap checkpoints during the session, one expensive anchor at the end.
+### Verification costs the buyer nothing
 
-No EVM chain charges you for a log write unless you deploy a contract to do it, and then
-you are paying for the contract, not for the commitment.
+The mirror node is public, free and unauthenticated. No key, no signup, no permission from
+the seller. That is the only condition under which "check it yourself" is a real offer.
 
-### 4. Verification costs the buyer nothing
-
-Hedera's mirror node is public, unauthenticated and free. No key, no signup, no rate-limit
-deal, no permission from the seller. That is the only condition under which "don't trust
-me, check it" is a real offer rather than a slogan, and it is why the verifier in this repo
-needs nothing but a session id.
-
-### And no smart contract, anywhere
-
-Both tiers are Consensus Service. Metering, commitment and settlement are native Hedera
-primitives, not an EVM pattern carried across. Nothing to deploy, nothing to upgrade,
-nothing to audit for reentrancy.
+**And no smart contract anywhere.** Both tiers are Consensus Service. Nothing to deploy,
+upgrade, or audit for reentrancy.
 
 ### Things learned the hard way
 
-Detail that only shows up once you build on this:
-
-- Creating a HIP-991 topic fails with `INSUFFICIENT_TX_FEE` (status 9) and no hint that
-  custom fees are the cause. It needs an explicit `.setMaxTransactionFee(new Hbar(40))`.
-- The topic's custom fee goes to a **collector fixed at topic creation**, not to the paying
-  buyer. It is a cost imposed on the writer, not a rebate to the reader.
-- `fee_exempt_key_list` is deliberately left **empty**, so the seller is not exempt from its
-  own topic's fee. Exempting yourself would remove the entire incentive.
-- Accounts auto-created via EVM alias are **hollow** (`key: null`) until they sign
-  something, which breaks the facilitator's `AccountInfoQuery`.
-- **ECDSA (secp256k1) keys only.** An ED25519 key fails *silently* in EVM-adjacent tooling,
-  surfacing later as a confusing signature mismatch.
+| | |
+|---|---|
+| HIP-991 topic creation fails `INSUFFICIENT_TX_FEE` with no hint that custom fees are the cause | needs an explicit `.setMaxTransactionFee(new Hbar(40))` |
+| The topic's custom fee goes to a collector fixed at creation | it is a cost on the writer, not a rebate to the reader |
+| `fee_exempt_key_list` is deliberately empty | exempting yourself removes the whole incentive |
+| EVM-alias accounts are hollow (`key: null`) until they sign | breaks the facilitator's `AccountInfoQuery` |
+| ECDSA (secp256k1) only | an ED25519 key fails *silently* in EVM-adjacent tooling |
 
 ---
 
@@ -319,13 +286,11 @@ metered-session primitive above, unchanged. One tick is one second held.
 
 ## Hardware and pricing
 
-One credit is one second held. Every line below was verified by provisioning the lane
-and reading the device back off the machine itself, so the catalogue cannot advertise
-silicon it is unable to deliver.
+One credit is one second held. Every lane below was provisioned and the device read back
+off the machine before listing.
 
-Each lane's price is committed **inside the 402 the agent signs**, and the lane is read
-from the **session**, never from the request. An agent cannot pay `cpu-1` prices and then
-ask for a B300, and it can never be charged a rate it did not agree to.
+Each lane's price is committed **inside the 402 the agent signs**, and the lane comes from
+the **session**, never the request, so an agent cannot pay `cpu-1` prices and ask for a B300.
 
 ### Accelerator lanes
 
@@ -350,19 +315,17 @@ ask for a B300, and it can never be charged a rate it did not agree to.
 
 ### How the price is set
 
-Every lane uses one formula, so the arithmetic is checkable rather than asserted:
+One formula for every lane:
 
 ```
 price per second = (accelerator + vCPU + RAM + disk cost) x 1.10
 ```
 
-rounded to the nearest 1,000 tinybar. The 10% is the entire margin. `compute/rates.json`
-carries the underlying cost of every lane, so you can divide and check.
+rounded to the nearest 1,000 tinybar. The 10% is the entire margin, and `compute/rates.json`
+carries each lane's underlying cost.
 
-A session buys **120 seconds** by default and tops up from there. Session cost is simply
-`tinybarPerSecond x 120`, and anything unused comes back at close.
-
-Live and machine readable, including per lane maximum session length:
+A session buys **120 seconds** by default and tops up from there. Anything unused comes back
+at close. Live and machine readable:
 
 ```bash
 curl <host>/lanes
@@ -463,7 +426,7 @@ on, in the same still running process**, and finished. 180 credits bought, 141 b
 
 ## For AI agents
 
-Every agent surface is gated on confirmed on chain payment. **No tool returns data before
+Every agent surface is gated on confirmed on-chain payment. **No tool returns data before
 its payment settles.**
 
 ### Tools
@@ -494,13 +457,10 @@ release_machine(...)               ALWAYS. the meter runs until you do
 
 Three things worth telling an agent explicitly:
 
-1. **Release the machine.** The meter runs until it does. Everything on the filesystem is
-   gone afterwards, so download first.
-2. **Thinking time is billed.** Seconds spent deciding the next step cost the same as
-   seconds spent computing. Plan the work before renting, and prefer `run_compute` when
-   the job is a single known script.
-3. **Pick the lane deliberately.** A `gpu-b300` costs 207x a `cpu-1` per second. Read
-   `/lanes` and choose on VRAM and price.
+1. **Release the machine.** The meter runs until it does, and the filesystem is gone after.
+2. **Thinking time is billed.** Deliberating between steps costs the same as computing.
+   Prefer `run_compute` when the job is a single known script.
+3. **Pick deliberately.** A `gpu-b300` costs 207x a `cpu-1` per second.
 
 Spend guards (`maxPerCallTinybar`, `budgetTinybar`) reject a challenge **before any
 signature exists**, so a mispriced or injected 402 can never put funds at risk.
