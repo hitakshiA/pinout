@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto";
 import { env, mirror } from "../src/config.mjs";
 
 /** Never create an account without enough to exist and pay a fee or two. */
-const MIN_FUND_TINYBAR = 100_000_000;      // 1 HBAR
+export const MIN_FUND_TINYBAR = 100_000_000;   // 1 HBAR
 /** Refuse to custody more than this per workspace on testnet. */
 const MAX_FUND_TINYBAR = 5_000_000_000;    // 50 HBAR
 
@@ -42,10 +42,13 @@ function operator() {
  */
 export async function createWorkspaceAccount({ funderAccountId, initialTinybar }) {
   if (!funderAccountId) throw new Error("a workspace account must be bound to a funder");
-  if (initialTinybar < MIN_FUND_TINYBAR) {
-    throw new Error(`fund at least ${MIN_FUND_TINYBAR} tinybar so the account can pay its own way`);
-  }
-  if (initialTinybar > MAX_FUND_TINYBAR) {
+  // A new account must hold enough to exist and pay a fee or two, and that
+  // floor is Hedera's, not the job's. An agent that correctly works out it only
+  // needs 0.28 HBAR of GPU time should not be refused for it. Fund the floor
+  // and let the remainder go home on close, where every unused tinybar goes
+  // anyway.
+  const funded = Math.max(initialTinybar, MIN_FUND_TINYBAR);
+  if (funded > MAX_FUND_TINYBAR) {
     throw new Error(`this build will not custody more than ${MAX_FUND_TINYBAR} tinybar per workspace`);
   }
 
@@ -54,7 +57,7 @@ export async function createWorkspaceAccount({ funderAccountId, initialTinybar }
     const key = PrivateKey.generateECDSA();
     const receipt = await (await new AccountCreateTransaction()
       .setKeyWithoutAlias(key.publicKey)
-      .setInitialBalance(Hbar.fromTinybars(initialTinybar))
+      .setInitialBalance(Hbar.fromTinybars(funded))
       // the account cannot outlive the workspace unnoticed
       .setAccountMemo(`pinout.club workspace, returns to ${funderAccountId}`)
       .execute(client)).getReceipt(client);
@@ -64,6 +67,8 @@ export async function createWorkspaceAccount({ funderAccountId, initialTinybar }
       privateKey: key.toStringDer(),
       publicKey: key.publicKey.toStringDer(),
       boundFunder: funderAccountId,
+      fundedTinybar: funded,
+      requestedTinybar: initialTinybar,
       createdAt: Date.now(),
       id: randomUUID(),
     };

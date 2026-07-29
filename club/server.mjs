@@ -37,6 +37,7 @@ app.get("/", (c) => c.json({
     create: "POST /workspace",
     read: "GET /workspace/:id",
     run: "POST /workspace/:id/run",
+    decide: "POST /workspace/:id/decide  (approve | deny | revise)",
     fund: "POST /workspace/:id/fund",
     events: "GET /workspace/:id/events  (SSE)",
     close: "POST /workspace/:id/close",
@@ -59,7 +60,13 @@ app.get("/workspace/:id", (c) => {
   const run = rt.runOf(a.w.id);
   return c.json({
     ...ws.publicView(a.w),
-    run: run ? { state: run.state, fundingRequest: run.fundingRequest, log: run.log.slice(-60) } : null,
+    run: run ? {
+      state: run.state,
+      awaitingApproval: run.pendingApproval,
+      ceilingTinybar: run.ceilingTinybar,
+      approvals: run.approvals,
+      log: run.log.slice(-80),
+    } : null,
   });
 });
 
@@ -84,10 +91,37 @@ app.post("/workspace/:id/run", async (c) => {
 
   ws.appendMessage(a.w.id, { role: "user", text: task });
   try {
-    const run = await rt.startRun(a.w.id, { task, budgetTinybar });
+    const run = await rt.startRun(a.w.id, { task, ceilingTinybar: budgetTinybar });
     return c.json({ started: true, state: run.state });
   } catch (e) {
     return c.json({ error: e.message }, 400);
+  }
+});
+
+/**
+ * The human's verdict on what the agent asked to spend.
+ *
+ * Three answers, not two. "Change the plan" is the interesting one: an agent
+ * that picks a B300 for a job a T4 would do should be corrected, not denied and
+ * left to guess. Both non-approvals reject the same tool call; only the message
+ * the model receives differs.
+ */
+app.post("/workspace/:id/decide", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const body = await c.req.json().catch(() => ({}));
+  const verdict = String(body?.verdict ?? "").toLowerCase();
+  const feedback = body?.feedback ? String(body.feedback) : null;
+
+  if (!["approve", "deny", "revise"].includes(verdict)) {
+    return c.json({ error: "verdict must be approve, deny or revise" }, 400);
+  }
+  if (verdict === "revise" && !feedback) {
+    return c.json({ error: "revise needs feedback saying what to change" }, 400);
+  }
+  try {
+    return c.json(await rt.decide(a.w.id, { verdict, feedback }));
+  } catch (e) {
+    return c.json({ error: e.message }, 409);
   }
 });
 

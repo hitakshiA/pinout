@@ -33,11 +33,33 @@ function clipOutput(text, limit = 6000) {
  */
 export function pinoutTools({
   base = env.PINOUT_URL ?? "http://localhost:4021",
-  accountId, privateKey,
+  accountId, privateKey, getWallet, assets,
   maxPerCallTinybar = 5_000_000,
   budgetTinybar = 100_000_000,
 } = {}) {
-  const client = new PinoutClient({ base, accountId, privateKey, maxPerCallTinybar, budgetTinybar });
+  // The client is built on first paid use, not here.
+  //
+  // PinoutClient falls back to env.HEDERA_PRIVATE_KEY when it is handed no key,
+  // which is the operator's own wallet. A hosted workspace builds its tools
+  // before the user has funded anything, so an eager client would quietly sign
+  // with the host's key and spend the host's money on a stranger's job. Nothing
+  // paid can be reached until a wallet actually exists.
+  let client = null;
+  function pinout() {
+    if (client) return client;
+    const w = getWallet ? getWallet() : { accountId, privateKey };
+    if (getWallet && !(w?.accountId && w?.privateKey)) {
+      throw new Error(
+        "this workspace has no wallet yet. Call request_funding and wait for the " +
+        "human to approve it before trying to buy anything."
+      );
+    }
+    client = new PinoutClient({
+      base, accountId: w?.accountId ?? accountId, privateKey: w?.privateKey ?? privateKey,
+      maxPerCallTinybar, budgetTinybar,
+    });
+    return client;
+  }
   const received = new Map();
 
   const discover = tool({
@@ -74,8 +96,8 @@ export function pinoutTools({
       // A compute lane is a different priced route; the lane is committed in
       // the 402 the buyer signs, so it cannot be chosen later.
       const s = a.lane
-        ? await client.openComputeSession(a.lane)
-        : await client.openSession();
+        ? await pinout().openComputeSession(a.lane)
+        : await pinout().openSession();
       received.set(s.sessionId, []);
       return {
         sessionId: s.sessionId, lane: s.lane ?? "token", unit: s.unit,
@@ -100,12 +122,12 @@ export function pinoutTools({
     }),
     execute: async (a) => {
       const events = []; let topUps = 0;
-      const { terminated } = await client.stream(a.sessionId, {
+      const { terminated } = await pinout().stream(a.sessionId, {
         n: a.n ?? 300, provider: a.provider,
         onEvent: (e) => events.push(e),
         onLow: async () => {
           if (a.autoTopUp === false || topUps >= 3) return;
-          await client.topUp(a.sessionId); topUps++;
+          await pinout().topUp(a.sessionId); topUps++;
         },
       });
       const log = received.get(a.sessionId) ?? [];
@@ -125,7 +147,7 @@ export function pinoutTools({
     description: "Close a session. Refunds unused credits on-chain immediately; the settlement anchor is recorded separately (batched by default).",
     inputSchema: z.object({ sessionId: z.string(), cause: z.string().optional() }),
     execute: async (a) => {
-      const r = await client.close(a.sessionId, a.cause);
+      const r = await pinout().close(a.sessionId, a.cause);
       return {
         consumedTinybar: r.consumedAmount, refundTinybar: r.refundAmount,
         settlementTx: r.settlementTx, refundTx: r.refundTxUrl,
@@ -153,10 +175,22 @@ export function pinoutTools({
     name: "spend_report",
     description: "How much this agent has spent on-chain so far and what budget remains.",
     inputSchema: z.object({}),
-    execute: async () => ({
-      spentTinybar: client.spent, budgetTinybar: client.budget,
-      remainingTinybar: client.budget - client.spent, account: client.accountId,
-    }),
+    // Asking what you have spent must never be the thing that fails. Before a
+    // wallet exists the honest answer is "nothing yet", not an error.
+    execute: async () => {
+      if (!client) {
+        return {
+          spentTinybar: 0, budgetTinybar, remainingTinybar: budgetTinybar,
+          account: null, funded: false,
+          note: "no wallet on this workspace yet, so nothing has been spent",
+        };
+      }
+      return {
+        spentTinybar: client.spent, budgetTinybar: client.budget,
+        remainingTinybar: client.budget - client.spent, account: client.accountId,
+        funded: true,
+      };
+    },
   });
 
   const top_up = tool({
@@ -169,7 +203,7 @@ export function pinoutTools({
       "instead throws away the work already paid for.",
     inputSchema: z.object({ sessionId: z.string() }),
     execute: async (a) => {
-      const r = await client.topUp(a.sessionId);
+      const r = await pinout().topUp(a.sessionId);
       return { credits: r.credits, paidTinybar: r.paidTinybar ?? r.amountPaid,
                paymentTx: r.paymentTxUrl ?? r.paymentTx,
                note: "the job resumes on the same machine, from where it paused" };
@@ -206,7 +240,7 @@ function machineOr404(sessionId) {
     }),
     execute: async (a) => {
       const lane = a.lane ?? "cpu-small";
-      const m = await client.rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
+      const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
       rented.set(m.sessionId, m);
       return {
         sessionId: m.sessionId, lane, secondsPurchased: m.secondsPurchased,
@@ -342,7 +376,7 @@ function machineOr404(sessionId) {
       let paused = 0, resumed = 0, topUps = 0, topUpError = null;
       let out;
       try {
-        out = await client.stream(a.sessionId, {
+        out = await pinout().stream(a.sessionId, {
           n: a.maxSeconds ?? 120, provider: "compute", code: a.code,
           onEvent: (e) => {
             seconds++;
@@ -352,7 +386,7 @@ function machineOr404(sessionId) {
           onPaused: async () => {
             paused++;
             if (a.autoTopUp === false || topUps >= 3) return;
-            try { await client.topUp(a.sessionId); topUps++; }
+            try { await pinout().topUp(a.sessionId); topUps++; }
             catch (e) { topUpError = e.message; }
           },
           onResumed: () => { resumed++; },
@@ -378,6 +412,87 @@ function machineOr404(sessionId) {
     },
   });
 
+  /**
+   * Staging a workspace input onto a machine WITHOUT it passing through the
+   * model's context. upload_file needs the agent to hand over base64, which
+   * means a 40 MB input would have to be read into the prompt to be moved four
+   * feet. The bytes never leave the server here; the agent only names the file.
+   */
+  const stage_input = tool({
+    name: "stage_input",
+    description:
+      "Copy a file the human attached to this workspace onto a machine you are " +
+      "renting. Use this for every input file. You never need to read the " +
+      "contents yourself, and doing so would waste your context.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      name: z.string().describe("the input's filename, as shown by list_inputs"),
+      destPath: z.string().describe("absolute path on the machine, e.g. /work/data.csv"),
+    }),
+    execute: async (a) => {
+      if (!assets) return { error: "this workspace has no attached inputs" };
+      const asset = assets.byName(a.name);
+      if (!asset) {
+        return {
+          error: `no input named ${a.name}`,
+          available: assets.list().map((x) => x.name),
+        };
+      }
+      if (asset.needsChunking) {
+        return {
+          error: `${a.name} is ${asset.bytes} bytes, over the ${32 * 1024 * 1024} byte ` +
+                 `single-upload cap. Split it or process it in parts.`,
+        };
+      }
+      const buf = assets.read(asset.id);
+      const m = machineOr404(a.sessionId);
+      const r = await m.upload(a.destPath, buf);
+      return { ...r, stagedBytes: buf.length, sha256: asset.sha256, path: a.destPath };
+    },
+  });
+
+  /**
+   * The other direction, and the one that was missing entirely: getting a
+   * result back to the human. download_file pulls bytes into the agent's
+   * context, which is fine for a number in a text file and useless for a 40 MB
+   * checkpoint. This takes the file off the machine and files it as a workspace
+   * artifact the human can download, and hands the agent back only a receipt.
+   */
+  const deliver_file = tool({
+    name: "deliver_file",
+    description:
+      "Give a file on the machine back to the human as a finished result. Use " +
+      "this for anything they asked for: trained weights, a cleaned dataset, a " +
+      "report, a chart. The bytes go straight to them without passing through " +
+      "your context, so this works for large files. Do this BEFORE you release " +
+      "the machine, because the filesystem is destroyed when you do.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      path: z.string().describe("absolute path on the machine, e.g. /work/model.pt"),
+      name: z.string().optional().describe("what to call it for the human"),
+      description: z.string().optional().describe("one line on what this file is"),
+    }),
+    execute: async (a) => {
+      if (!assets?.deliver) return { error: "this workspace cannot accept deliveries" };
+      const m = machineOr404(a.sessionId);
+      const got = await m.download(a.path);
+      const buf = Buffer.isBuffer(got) ? got : Buffer.from(got.content ?? got, "base64");
+      const art = assets.deliver({
+        name: a.name ?? a.path.split("/").pop(),
+        bytes: buf,
+        description: a.description ?? null,
+        fromPath: a.path,
+        sessionId: a.sessionId,
+      });
+      return {
+        delivered: true, name: art.name, bytes: art.bytes,
+        sha256: art.sha256.slice(0, 16),
+        note: "the human can download this now. it survives releasing the machine.",
+      };
+    },
+  });
+
   return [discover, open_session, rent_machine, exec, upload_file, download_file, list_files,
+          stage_input, deliver_file,
           release_machine, run_compute, top_up, stream, close_session, verify_session, spend_report];
 }
