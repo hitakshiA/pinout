@@ -1,19 +1,34 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="180" viewBox="0 0 720 180" role="img" aria-label="Pinout">
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="260" viewBox="0 0 1000 260" role="img" aria-label="Pinout">
   <defs>
     <linearGradient id="m" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#a98bff"/><stop offset="1" stop-color="#5b34c9"/>
     </linearGradient>
+    <filter id="g" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-color="#8259ef" flood-opacity="0.55" result="s"/>
+      <feComponentTransfer in="SourceAlpha" result="a"><feFuncA type="linear" slope="1"/></feComponentTransfer>
+      <feOffset in="a" dx="0" dy="5" result="o"/>
+      <feGaussianBlur in="o" stdDeviation="5" result="bw"/>
+      <feComposite in="a" in2="bw" operator="out" result="mw"/>
+      <feFlood flood-color="#bbb6fd" flood-opacity="0.42" result="fw"/>
+      <feComposite in="fw" in2="mw" operator="in" result="iw"/>
+      <feGaussianBlur in="a" stdDeviation="7" result="bb"/>
+      <feComposite in="a" in2="bb" operator="out" result="mb"/>
+      <feFlood flood-color="#8259ef" flood-opacity="0.32" result="fb"/>
+      <feComposite in="fb" in2="mb" operator="in" result="ib"/>
+      <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/><feMergeNode in="iw"/><feMergeNode in="ib"/></feMerge>
+    </filter>
   </defs>
-  <!-- the mark: a socket with four pins entering it. a pinout is the map of
-       which line lands on which pin, so the mark is that, not an app icon -->
-  <g transform="translate(150,48)">
-    <g stroke="#8259ef" stroke-width="9" stroke-linecap="round">
-      <path d="M42 -18 v18"/><path d="M42 102 v-18"/>
-      <path d="M-18 42 h18"/><path d="M102 42 h-18"/>
+  <!-- a socket with four pins entering it: a pinout is the map of which line
+       lands on which pin, so the mark is that rather than an app icon -->
+  <g transform="translate(96,80)">
+    <g stroke="#8259ef" stroke-width="10" stroke-linecap="round">
+      <path d="M50 -22 v22"/><path d="M50 122 v-22"/>
+      <path d="M-22 50 h22"/><path d="M122 50 h-22"/>
     </g>
-    <rect y="0" width="84" height="84" rx="24" fill="url(#m)"/>
-    <rect x="30" y="30" width="24" height="24" rx="7" fill="#ffffff"/>
+    <rect width="100" height="100" rx="28" fill="url(#m)"/>
+    <rect x="36" y="36" width="28" height="28" rx="8" fill="#ffffff"/>
   </g>
-  <text x="272" y="116" font-family="Inter, SF Pro Display, Segoe UI, Helvetica Neue, Arial, sans-serif"
-        font-size="78" font-weight="700" letter-spacing="-2.8" fill="#0b0817">Pinout</text>
+  <text x="252" y="172" filter="url(#g)"
+        font-family="Inter, SF Pro Display, Segoe UI, Helvetica Neue, Arial, sans-serif"
+        font-size="128" font-weight="700" letter-spacing="-5" fill="#0b0817">Pinout</text>
 </svg>
