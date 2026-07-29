@@ -283,11 +283,35 @@ export class Run extends EventEmitter {
       // machine is still billing, and the exit looks exactly like success.
       // The timer is deliberately NOT unref'd for that reason.
       const hold = setInterval(() => {}, 30_000);
-      const done = (fn) => (v) => { clearInterval(hold); fn(v); };
 
-      this.fundingWaiter = done(resolve);
+      // And watch the balance, not just the doorbell.
+      //
+      // Money can arrive by more paths than the one that rings: a signed
+      // transfer whose confirmation call failed, a direct top-up, a deposit
+      // that was already sitting there. Waiting only for an explicit
+      // fundingArrived left a run stuck at "waiting for 0.5 HBAR" beside a
+      // wallet holding 0.96, because the notification failed even though the
+      // transfer had not. Whoever put the money there, it is there.
+      let watch;
+      const settle = (fn) => (v) => { clearInterval(hold); clearInterval(watch); fn(v); };
+      watch = setInterval(async () => {
+
+        const acct = threads.get(this.threadId)?.wallet?.accountId;
+        if (!acct) return;
+        const have = await balanceOf(acct).catch(() => null);
+        if (have != null && have >= needTinybar) {
+          this.say("funded", {
+            accountId: acct, tinybar: have, noticedByPolling: true,
+            hashscan: hashscanAccount(acct),
+          });
+          settle(resolve)({ accountId: acct, tinybar: have });
+        }
+      }, 8_000);
+
+
+      this.fundingWaiter = settle(resolve);
       this.abort.signal.addEventListener(
-        "abort", () => done(reject)(new Error("run cancelled while waiting for funding")),
+        "abort", () => settle(reject)(new Error("run cancelled while waiting for funding")),
         { once: true }
       );
     });
