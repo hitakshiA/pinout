@@ -324,6 +324,29 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
     } catch { /* stream ends with the turn */ }
   })();
 
+  // And their RESULTS.
+  //
+  // Only calls were streamed before, so when a tool failed the agent could see
+  // why and nobody else could. A run ended with the agent reporting "the
+  // service is having issues" and the log showed nothing but the call that
+  // provoked it, which made the one error that mattered the only thing not
+  // written down. A chat log that shows what was attempted but never what came
+  // back cannot be debugged by the user either.
+  (async () => {
+    try {
+      for await (const ev of result.getFullResponsesStream()) {
+        const out = ev?.result ?? ev?.output ?? null;
+        if (!out || !/tool/i.test(ev.type ?? "")) continue;
+        const text = typeof out === "string" ? out : JSON.stringify(out);
+        const failed = /"error"|outOfCredits|"status":\s*[45]\d\d/.test(text);
+        run.say(failed ? "tool_failed" : "tool_result", {
+          name: ev.name ?? ev.toolName ?? "?",
+          result: text.slice(0, 700),
+        });
+      }
+    } catch { /* stream ends with the turn */ }
+  })();
+
   const text = await result.getText().catch((e) => {
     // An approval pause is not a failure, it is the design working.
     if (/approval|pending/i.test(e?.message ?? "")) return "";

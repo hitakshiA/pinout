@@ -75,6 +75,12 @@ function render(ev) {
     case "answer":
       console.log(`\n${C.agent("agent")} ${ev.text}\n`);
       break;
+    case "tool_failed":
+      console.log(C.bad(`  ${ev.name} FAILED  ${ev.result.slice(0, 300)}`));
+      break;
+    case "tool_result":
+      console.log(C.dim(`    -> ${ev.result.slice(0, 160)}`));
+      break;
     case "error":
       console.log(C.bad(`  error: ${ev.message}`));
       break;
