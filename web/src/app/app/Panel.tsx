@@ -162,10 +162,11 @@ function Money({
 }
 
 function Files({
-  assets, artifacts, urlFor,
-}: { assets: Asset[]; artifacts: Asset[]; urlFor: (id: string) => string }) {
+  assets, artifacts, urlFor, onOpen,
+}: { assets: Asset[]; artifacts: Asset[]; urlFor: (id: string) => string;
+     onOpen: (a: Asset) => void }) {
   const row = (a: Asset, made: boolean) => (
-    <div className="ws-row" key={a.id}>
+    <div className="ws-row ws-rowclick" key={a.id} onClick={() => onOpen(a)}>
       <div style={{ minWidth: 0 }}>
         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {a.name}
@@ -175,7 +176,7 @@ function Files({
           {" · "}<span className="ws-mono">{a.sha256.slice(0, 10)}</span>
         </div>
       </div>
-      {made && <a className="ws-link" href={urlFor(a.id)} download>Download</a>}
+      <span className="ws-link">{made ? "Open" : "View"}</span>
     </div>
   );
 
@@ -229,8 +230,9 @@ function Session({ chat }: { chat: Chat | null }) {
 }
 
 export function Panel({
-  chat, wallet, tab, setTab, urlFor, onFundDirect, onFundSigned, onWithdraw, busy, onClose,
+  chat, wallet, tab, setTab, urlFor, onFundDirect, onFundSigned, onWithdraw, busy, onClose, onOpen,
 }: {
+  onOpen: (a: Asset) => void;
   chat: Chat | null; wallet: Wallet | null;
   tab: string; setTab: (t: string) => void;
   urlFor: (id: string) => string;
@@ -260,7 +262,8 @@ export function Panel({
                  onWithdraw={onWithdraw} busy={busy} />
         )}
         {tab === "Files" && (
-          <Files assets={chat?.assets ?? []} artifacts={chat?.artifacts ?? []} urlFor={urlFor} />
+          <Files assets={chat?.assets ?? []} artifacts={chat?.artifacts ?? []}
+                 urlFor={urlFor} onOpen={onOpen} />
         )}
         {tab === "Session" && <Session chat={chat} />}
       </div>

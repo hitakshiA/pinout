@@ -419,3 +419,61 @@
   content: "…"; animation: ws-blink 1.2s steps(2, start) infinite;
 }
 .ws-tools[data-failed="true"] { color: var(--ws-warn); }
+
+/* ---------------- artifact preview ---------------- */
+
+/* roughly half the window, its own header, like the reference. downloading a
+   file to find out whether the job worked is a bad loop */
+.ws-preview {
+  width: 52%; min-width: 380px; flex: none;
+  border-left: 1px solid var(--ws-line);
+  background: var(--ws-panel);
+  display: flex; flex-direction: column;
+  animation: ws-slide 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ws-preview-top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 12px 11px 16px;
+  border-bottom: 1px solid var(--ws-line);
+}
+.ws-preview-name {
+  font-size: 14px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-preview-meta { font-size: 11.5px; color: var(--ws-dim); margin-top: 2px; }
+.ws-preview-body {
+  flex: 1; overflow: auto; padding: 16px;
+  display: flex; flex-direction: column;
+}
+.ws-preview-body::-webkit-scrollbar { width: 9px; height: 9px; }
+.ws-preview-body::-webkit-scrollbar-thumb { background: var(--ws-line); border-radius: 5px; }
+
+.ws-media {
+  max-width: 100%; max-height: 100%; margin: auto;
+  border-radius: 10px; background: #000;
+}
+.ws-pre {
+  margin: 0; font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px; line-height: 1.6; color: var(--ws-muted);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.ws-tablewrap { overflow: auto; }
+.ws-table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.ws-table th, .ws-table td {
+  text-align: left; padding: 6px 11px;
+  border-bottom: 1px solid var(--ws-line); white-space: nowrap;
+}
+.ws-table th { color: var(--ws-lav); font-weight: 600; position: sticky; top: 0; background: var(--ws-panel); }
+.ws-table td { color: var(--ws-muted); font-variant-numeric: tabular-nums; }
+
+.ws-rowclick { cursor: pointer; }
+.ws-rowclick:hover { background: var(--ws-raise); }
+
+@media (max-width: 1240px) {
+  .ws-preview {
+    position: absolute; right: 0; top: 0; bottom: 0;
+    width: min(560px, 96vw); z-index: 30;
+    box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
+  }
+}

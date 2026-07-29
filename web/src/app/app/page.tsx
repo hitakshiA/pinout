@@ -11,6 +11,8 @@ import {
   type ToolMark,
 } from "./Transcript";
 import { Panel } from "./Panel";
+import { Preview } from "./Preview";
+import type { Asset } from "./api";
 
 /**
  * One agent workspace, no sign-in.
@@ -57,6 +59,8 @@ export default function Workspace() {
     return () => mq.removeEventListener("change", on);
   }, []);
   const [tab, setTab] = useState("Wallet");
+  // an artifact opens a real preview, not a file list
+  const [preview, setPreview] = useState<Asset | null>(null);
 
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<File[]>([]);
@@ -488,7 +492,11 @@ export default function Workspace() {
                   return (
                     <div className="ws-turn" key={b.id}>
                       <ArtifactCard name={b.name} bytes={b.bytes} kind={b.kind}
-                                    onOpen={() => { setPanelOpen(true); setTab("Files"); }} />
+                                    onOpen={() => {
+                                      const a = chat?.artifacts.find((x) => x.name === b.name)
+                                             ?? chat?.assets.find((x) => x.name === b.name);
+                                      if (a) setPreview(a); else { setPanelOpen(true); setTab("Files"); }
+                                    }} />
                     </div>
                   );
                 }
@@ -557,11 +565,16 @@ export default function Workspace() {
           {floating && (panelOpen || !sideOpen) && panelOpen && (
             <div className="ws-scrim" onClick={() => setPanelOpen(false)} />
           )}
-          {panelOpen && (
+          {preview && ws && (
+            <Preview asset={preview} url={api.fileUrl(ws.id, ws.cap, preview.id)}
+                     onClose={() => setPreview(null)} />
+          )}
+          {panelOpen && !preview && (
             <Panel chat={chat} wallet={wallet} tab={tab} setTab={setTab}
                    urlFor={(aid) => (ws ? api.fileUrl(ws.id, ws.cap, aid) : "#")}
                    onFundDirect={money.fundDirect} onFundSigned={money.fundSigned}
                    onWithdraw={money.withdraw} busy={busy}
+                   onOpen={(a) => setPreview(a)}
                    onClose={() => setPanelOpen(false)} />
           )}
         </div>
