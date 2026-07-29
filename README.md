@@ -18,6 +18,16 @@ a pool of credits, a meter burns them as work happens, the agent tops up mid-ses
 without losing its work, and every unused credit is refunded on-chain. The human sets a
 spending ceiling. The agent decides what to buy, how long to hold it, and when to stop.
 
+**It is built on Hedera specifically, and it would not work anywhere else.** Consumption is
+checkpointed to a [Hedera Consensus Service](https://docs.hedera.com/hedera/core-concepts/consensus-service)
+topic whose `running_hash` is maintained by the network, so the seller cannot restate a
+bill it already published. Settlement is anchored to a [HIP-991](https://hips.hedera.com/hip/hip-991)
+fee-charging topic that costs the seller real, unrecoverable HBAR to write, which makes
+over-reporting expensive by construction. The agent pays **zero network fees** thanks to
+Hedera's fee-payer model, so it holds exactly what it means to spend. And the whole bill is
+recomputable by anyone from the free public mirror node. There is **no smart contract in
+this system** at all.
+
 **[Pinout Compute](#pinout-compute)** is the first service built on it: CPU and NVIDIA
 GPU machines an agent rents by the second.
 
@@ -110,25 +120,45 @@ it lands.
 
 ---
 
----
-
 ## Why Hedera
 
-| Property | What it buys |
-|---|---|
-| **Fee payer model** | The facilitator pays all network fees. The buyer needs **no fee headroom**, so it can hold exactly the purchase amount and transact. |
-| **HIP-991 topic fees** | A log that **costs money to write**, ~0.7345 HBAR per settlement anchor in irrecoverable network fees, so publishing your final numbers is expensive and over reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a collector fixed at topic creation, **not** to the paying buyer. |
-| **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
-| **Free mirror node** | Public, unauthenticated, no signup, so verification costs the buyer nothing. |
+Four platform properties carry this design. Each one is load-bearing, and each fails
+somewhere else.
 
----
+### 1. The agent pays no network fees
 
----
+In Hedera's `exact` scheme the facilitator signs as fee payer and submits on the agent's
+behalf. Measured on a real payment:
 
-## The two tier ledger
+| Account | Balance change | |
+|---|---:|---|
+| agent (buyer) | `-100,000` tinybar | exactly the price, nothing else |
+| seller | `+100,000` tinybar | |
+| facilitator | `-290,693` tinybar | **the entire network fee** |
 
-The original design checkpointed everything to a HIP-991 fee charging topic. Measurement
-killed it:
+The agent's balance moves by the price and not one tinybar more. It never holds a gas
+float, never monitors one, and never tops one up. On a chain where the payer funds its own
+gas, every agent needs a second balance that somebody has to keep alive, and an agent that
+runs dry mid-session fails for a reason that has nothing to do with the work.
+
+### 2. The ledger is chained by the network, not by the seller
+
+Consumption checkpoints go to a plain HCS topic. Hedera assigns each message a
+`sequence_number` and maintains a `running_hash` across the topic, computed by consensus
+nodes. The party being audited is not the party computing the audit chain, so a seller
+cannot quietly rewrite usage it already published.
+
+The settlement anchor then commits to the final `sequence_number` **and** that
+`running_hash`, which freezes the entire consumption history behind one record.
+
+### 3. A log that costs money to write
+
+The settlement anchor goes to a HIP-991 fee-charging topic, costing the seller about
+**0.7345 HBAR per write in irrecoverable network fees**. That is not overhead to minimise,
+it is the incentive: publishing your final numbers is expensive, so inflating them is
+expensive.
+
+Measured, and it shaped the architecture:
 
 | Payload | Plain HCS topic | HIP-991 topic |
 |--------:|----------------:|--------------:|
@@ -136,8 +166,49 @@ killed it:
 | 1,000 B |       $0.00078  |    **$0.0500** |
 | 4,000 B |       $0.00080  |    **$0.0500** |
 
-A fee charging topic costs a **flat ~$0.050 per message, 62x a plain topic, independent
-of payload size *and* of the fee amount.** So the meter is split:
+A fee-charging message costs a flat ~$0.050 regardless of payload size *and* regardless of
+the fee amount, about **62x** a plain topic. That is why the meter is two tiers rather than
+one: cheap checkpoints during the session, one expensive anchor at the end.
+
+No EVM chain charges you for a log write unless you deploy a contract to do it, and then
+you are paying for the contract, not for the commitment.
+
+### 4. Verification costs the buyer nothing
+
+Hedera's mirror node is public, unauthenticated and free. No key, no signup, no rate-limit
+deal, no permission from the seller. That is the only condition under which "don't trust
+me, check it" is a real offer rather than a slogan, and it is why the verifier in this repo
+needs nothing but a session id.
+
+### And no smart contract, anywhere
+
+Both tiers are Consensus Service. Metering, commitment and settlement are native Hedera
+primitives, not an EVM pattern carried across. Nothing to deploy, nothing to upgrade,
+nothing to audit for reentrancy.
+
+### Things learned the hard way
+
+Detail that only shows up once you build on this:
+
+- Creating a HIP-991 topic fails with `INSUFFICIENT_TX_FEE` (status 9) and no hint that
+  custom fees are the cause. It needs an explicit `.setMaxTransactionFee(new Hbar(40))`.
+- The topic's custom fee goes to a **collector fixed at topic creation**, not to the paying
+  buyer. It is a cost imposed on the writer, not a rebate to the reader.
+- `fee_exempt_key_list` is deliberately left **empty**, so the seller is not exempt from its
+  own topic's fee. Exempting yourself would remove the entire incentive.
+- Accounts auto-created via EVM alias are **hollow** (`key: null`) until they sign
+  something, which breaks the facilitator's `AccountInfoQuery`.
+- **ECDSA (secp256k1) keys only.** An ED25519 key fails *silently* in EVM-adjacent tooling,
+  surfacing later as a confusing signature mismatch.
+
+---
+
+## The two tier ledger
+
+The original design checkpointed everything to a HIP-991 fee charging topic. The
+[measured cost of a fee-charging write](#3-a-log-that-costs-money-to-write) killed that:
+flat ~$0.050 per message whatever its size, about 62x a plain topic. So the meter splits
+in two, cheap during the session and expensive once at the end:
 
 ```mermaid
 flowchart LR
@@ -165,8 +236,6 @@ anchoring costs ~0.73 HBAR against a session priced in thousandths of that, whic
 abandonment into a drain. `?settlement=priority` buys a dedicated anchor, but only when
 the session's own revenue covers its cost. Otherwise it falls back to batched, because
 unconditional priority is a free way to make a stranger spend 0.73 HBAR per call.
-
----
 
 ---
 
@@ -231,8 +300,6 @@ it against the buyer's own record exposes fabrication. A seller that fabricates 
 
 `INCONCLUSIVE` exists for exactly that reason. Without a client record, the verifier
 refuses to say "passed".
-
----
 
 ---
 
@@ -310,8 +377,6 @@ curl <host>/lanes
 
 ---
 
----
-
 ## What a machine can do
 
 A lane is a real Linux container, not a sandboxed expression evaluator. Everything here
@@ -335,8 +400,6 @@ open, so a job that fetches its own input should be tested rather than assumed.
 pools from the lane it bought rather than from what Python reports. The quota itself is
 real: a parallel benchmark scores 4.14x higher on `cpu-4` than on `cpu-1`, matching the
 4x vCPU ratio you pay for.
-
----
 
 ---
 
@@ -373,8 +436,6 @@ exit codes propagated, money balancing exactly.
 
 ---
 
----
-
 ## Running out mid job
 
 Credits hitting zero does **not** kill the machine. It pauses: the machine is held, the
@@ -397,8 +458,6 @@ Measured on the live deployment: a 150 second job on a 120 second session paused
 124 s, was billed **zero** for 10 s of pause, resumed at **step 120, the step it stopped
 on, in the same still running process**, and finished. 180 credits bought, 141 billed,
 39 refunded, and the on chain verifier passed all five checks.
-
----
 
 ---
 
@@ -486,8 +545,6 @@ node agent/chat.mjs -p "rent a GPU and…"  # headless
 
 ---
 
----
-
 ## Guards
 
 Testnet HBAR is free from a faucet, so **the payment gate provides no economic friction on
@@ -502,8 +559,6 @@ price for work you will not do:
 - **seller solvency**, refusing new sessions when the seller could not afford a settlement
   anchor for every open session, rather than risk stranding a prepaid balance
 - an orphan reaper across every fleet, because a forgotten accelerator bills in silence
-
----
 
 ---
 
@@ -530,8 +585,6 @@ npm run compute-e2e             # rent a real machine, run code, get refunded
 npm run e2e                     # metered token stream, end to end
 npm run verify -- <sessionId>   # recompute the bill from the mirror node
 ```
-
----
 
 ---
 
@@ -576,8 +629,6 @@ would otherwise be free compute.
 
 ---
 
----
-
 ## Token streams, the other workload
 
 The same meter runs token billed sessions, which is where the design started. One payment
@@ -588,8 +639,6 @@ pipeline unchanged, with one tick per second instead of one per token.
 ```bash
 npm run e2e
 ```
-
----
 
 ---
 
@@ -611,19 +660,8 @@ npm run e2e
 | `MAX_SESSION_DURATION_MS` | `600000` | Idle timeout before auto settle |
 | `FACILITATOR` | `x402` | `x402` or `blocky402` |
 
-`process.env` overrides `.env`, and `.env` is optional.
-
-> [!WARNING]
-> **ECDSA (secp256k1) keys only.** An ED25519 key fails *silently* in EVM adjacent
-> tooling. `viem` accepts any 32 byte hex and derives the wrong identity, surfacing as a
-> confusing "signature mismatch".
-
-> [!NOTE]
-> Accounts auto created via EVM alias are **hollow** (`key: null`) until they sign
-> something, which breaks the facilitator's `AccountInfoQuery` check. Use
-> `scripts/hydrate-key.mjs`, or create accounts with `AccountCreateTransaction`.
-
----
+`process.env` overrides `.env`, and `.env` is optional. Two key-format traps that will
+bite during setup are covered under [things learned the hard way](#things-learned-the-hard-way).
 
 ---
 
@@ -639,8 +677,6 @@ npm run e2e
 Implements the x402 [`metered-session`](https://github.com/x402-foundation/x402/issues/2273),
 [`offer-and-receipt`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/extension-offer-and-receipt.md)
 (JWS/ES256K profile) and [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) extensions.
-
----
 
 ---
 
