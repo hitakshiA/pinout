@@ -167,10 +167,19 @@ app.post("/workspace/:id/fund", async (c) => {
 app.get("/workspace/:id/events", (c) => {
   const a = claim(c); if (a.err) return a.err;
   return streamSSE(c, async (stream) => {
-    const run = rt.runOf(a.w.id);
+    // Wait for a run rather than hanging up on a client that got here first.
+    //
+    // A browser subscribes and THEN posts the task, because doing it the other
+    // way round races the opening events out of existence. This used to answer
+    // "idle" and close, so every correctly written frontend saw an empty
+    // stream and a job it could not watch.
+    const ac = new AbortController();
+    stream.onAbort(() => ac.abort());
+    let run = rt.runOf(a.w.id);
     if (!run) {
-      await stream.writeSSE({ event: "idle", data: JSON.stringify({ state: a.w.state }) });
-      return;
+      await stream.writeSSE({ event: "idle", data: JSON.stringify({ state: a.w.state, waiting: true }) });
+      run = await rt.waitForRun(a.w.id, { signal: ac.signal });
+      if (!run) return;
     }
     for (const ev of run.log) {
       await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });

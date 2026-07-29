@@ -143,6 +143,29 @@ function classify(e) {
 const runs = new Map();
 export function runOf(id) { return runs.get(id) ?? null; }
 
+/**
+ * Fires when a run starts, so an SSE client that subscribed first has
+ * something to wait on. A browser opens the event stream and then posts the
+ * task, in that order, because doing it the other way round races the first
+ * few events out of existence.
+ */
+export const bus = new EventEmitter();
+bus.setMaxListeners(0);
+
+/** Resolve with the run for this workspace, waiting if it has not started. */
+export function waitForRun(workspaceId, { signal } = {}) {
+  const now = runs.get(workspaceId);
+  if (now) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const on = (r) => {
+      if (r.workspaceId !== workspaceId) return;
+      bus.off("run", on); resolve(r);
+    };
+    bus.on("run", on);
+    signal?.addEventListener("abort", () => { bus.off("run", on); resolve(null); }, { once: true });
+  });
+}
+
 const DIR = join(ROOT, ".club");
 const stateFile = (id) => join(DIR, `conv-${id}.json`);
 // keyed by chat, not workspace: each chat is its own agent with its own memory
@@ -531,6 +554,7 @@ export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinyba
 
   const run = new Run(workspaceId, { task, ceilingTinybar: ceiling, threadId });
   runs.set(workspaceId, run);
+  bus.emit("run", run);
 
   (async () => {
     try {
