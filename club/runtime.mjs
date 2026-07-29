@@ -338,6 +338,10 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
         const out = ev?.result ?? ev?.output ?? null;
         if (!out || !/tool/i.test(ev.type ?? "")) continue;
         const text = typeof out === "string" ? out : JSON.stringify(out);
+        // The SDK surfaces each result twice: once as the tool's own result and
+        // again wrapped as the function_call_output item sent back to the model.
+        // They carry identical payloads, so the wrapper is noise in a chat log.
+        if (text.startsWith('{"type":"function_call_output"')) continue;
         const failed = /"error"|outOfCredits|"status":\s*[45]\d\d/.test(text);
         run.say(failed ? "tool_failed" : "tool_result", {
           name: ev.name ?? ev.toolName ?? "?",

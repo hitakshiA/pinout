@@ -300,6 +300,23 @@ function machineOr404(sessionId) {
         }
         throw e;
       }
+      // The server has its own way of saying the same thing. /exec answers a
+      // credit-less session with a plain error rather than throwing, so the
+      // client-side branch above never sees it and the agent got the bare
+      // string with no idea it was recoverable. Both paths mean "ask for more
+      // money", so both should say so.
+      if (r?.error && /no credits|out of credits|insufficient credit/i.test(r.error)) {
+        return {
+          outOfCredits: true,
+          sessionId: a.sessionId,
+          error: r.error,
+          whatToDo:
+            "Your machine is still held and your files are intact. Call " +
+            "request_funding with what you still need and why, saying what you " +
+            "have already produced. When the human funds it, call top_up on " +
+            "this same sessionId and carry on. Do NOT rent a second machine.",
+        };
+      }
       return {
         exitCode: r.exitCode, ms: r.ms,
         ...clipOutput(r.stdout ?? ""),
