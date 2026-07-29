@@ -264,8 +264,20 @@ export class Run extends EventEmitter {
   cancel() { this.abort.abort(); }
 }
 
-/** Tools the agent gets. Paid ones refuse until the workspace has a wallet. */
+/**
+ * Tools the agent gets. Paid ones refuse until the workspace has a wallet.
+ *
+ * Built ONCE per run and cached on it. drive() is called again on every
+ * approval, and rebuilding here handed the agent a fresh pinoutTools closure
+ * each time: a new empty `rented` map and a new PinoutClient with none of the
+ * session secrets. So the moment a human approved a top-up, the machine the
+ * agent was working on became invisible to it. top_up answered "unauthorized"
+ * because the new client had never seen that session, and the next exec said
+ * "no rented machine" about a machine that was still running and still
+ * billing. Both demos died here.
+ */
 function buildTools(run) {
+  if (run.tools) return run.tools;
   const request_hbar = tool({
     name: "request_hbar",
     description:
@@ -406,7 +418,8 @@ function buildTools(run) {
     budgetTinybar: run.ceilingTinybar,
   });
 
-  return [request_hbar, wallet_balance, list_inputs, peek_input, ...paid];
+  run.tools = [request_hbar, wallet_balance, list_inputs, peek_input, ...paid];
+  return run.tools;
 }
 
 /**
