@@ -6,6 +6,26 @@ import { PinoutClient } from "../src/client.mjs";
 import { verifySession } from "../src/verifier.mjs";
 import { env } from "../src/config.mjs";
 
+/**
+ * Truncating a job's stdout in the MIDDLE of a line, with no marker, made a
+ * completed 150-iteration job look like a crashed one: the agent read the
+ * severed final line as proof the work had stopped early and reported the
+ * service as broken. Results are almost always printed at the END, so keep the
+ * head and the tail and say plainly what was dropped.
+ */
+function clipOutput(text, limit = 6000) {
+  if (text.length <= limit) return { stdout: text };
+  const head = Math.floor(limit * 0.25), tail = limit - head;
+  return {
+    stdout: text.slice(0, head) +
+      `\n\n… [${text.length - limit} characters omitted from the middle — ` +
+      `this is a display limit, NOT the end of the job] …\n\n` +
+      text.slice(-tail),
+    stdoutTruncated: true,
+    stdoutTotalChars: text.length,
+  };
+}
+
 export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" } = {}) {
   const client = new PinoutClient({ base, maxPerCallTinybar: 5_000_000, budgetTinybar: 100_000_000 });
   const received = new Map();
@@ -129,6 +149,23 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
     }),
   });
 
+  const top_up = tool({
+    name: "top_up",
+    description:
+      "Buy more seconds for a session you already have, on-chain, WITHOUT losing " +
+      "the machine or the job running on it. Use this when a job runs out of " +
+      "credits: the machine is held for a short grace period, and topping up " +
+      "resumes the SAME process exactly where it paused. Opening a new session " +
+      "instead throws away the work already paid for.",
+    inputSchema: z.object({ sessionId: z.string() }),
+    execute: async (a) => {
+      const r = await client.topUp(a.sessionId);
+      return { credits: r.credits, paidTinybar: r.paidTinybar ?? r.amountPaid,
+               paymentTx: r.paymentTxUrl ?? r.paymentTx,
+               note: "the job resumes on the same machine, from where it paused" };
+    },
+  });
+
   const run_compute = tool({
     name: "run_compute",
     description:
@@ -136,52 +173,61 @@ export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" }
       "compute lane (open_session({lane:'cpu-small'})) — a token-billed session " +
       "cannot run code. You are billed per SECOND the machine is held; it is " +
       "released the moment your code finishes and unused seconds are refunded. " +
-      "Print your answer to stdout.",
+      "If the session runs out of credits mid-job the machine is HELD, not killed, " +
+      "and (unless autoTopUp is false) more seconds are bought automatically so the " +
+      "job continues uninterrupted. Print your answer to stdout.",
     inputSchema: z.object({
       sessionId: z.string(),
       code: z.string().describe("Python 3 source. Print results to stdout."),
       maxSeconds: z.number().optional().describe("hard ceiling on seconds held, default 120"),
+      autoTopUp: z.boolean().optional().describe("buy more seconds if the job outlives its credits, default true"),
     }),
     execute: async (a) => {
-      const q = new URLSearchParams({
-        n: String(a.maxSeconds ?? 120), provider: "compute",
-        code: Buffer.from(a.code, "utf8").toString("base64"),
-      });
-      const secret = client.secrets.get(a.sessionId);
-      const res = await fetch(`${base}/session/${a.sessionId}/stream?${q}`,
-        { headers: secret ? { Authorization: `Bearer ${secret}` } : {} });
-      if (!res.ok) {
-        return { error: `stream ${res.status}`, detail: (await res.text()).slice(0, 300),
+      // Uses the shared client rather than a private SSE parser. The old
+      // hand-rolled loop read only `data` frames, so SessionPaused,
+      // SessionWaiting and SessionTerminate were invisible: when credits ran
+      // out the agent saw the stream simply stop and concluded the job had
+      // finished. It could not discover that topping up would resume it, and
+      // opened a whole new session instead — paying twice and abandoning work.
+      const stdout = []; let seconds = 0, coldStartMs = null;
+      let paused = 0, resumed = 0, topUps = 0, topUpError = null;
+      let out;
+      try {
+        out = await client.stream(a.sessionId, {
+          n: a.maxSeconds ?? 120, provider: "compute", code: a.code,
+          onEvent: (e) => {
+            seconds++;
+            if (e.coldStartMs !== undefined) coldStartMs = e.coldStartMs;
+            if (e.stdout) stdout.push(e.stdout);
+          },
+          onPaused: async () => {
+            paused++;
+            if (a.autoTopUp === false || topUps >= 3) return;
+            try { await client.topUp(a.sessionId); topUps++; }
+            catch (e) { topUpError = e.message; }
+          },
+          onResumed: () => { resumed++; },
+        });
+      } catch (e) {
+        return { error: e.message, secondsBilled: seconds,
+                 ...clipOutput(stdout.join("\n")),
                  hint: "if this session was not opened with a compute lane, open a new one: open_session({lane:'cpu-small'})" };
       }
-
-      const reader = res.body.getReader(); const dec = new TextDecoder();
-      let buf = "", ev = null, seconds = 0, coldStartMs = null;
-      const stdout = []; const log = received.get(a.sessionId) ?? [];
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop();
-        for (const chunk of parts) for (const line of chunk.split("\n")) {
-          if (line.startsWith("event:")) ev = line.slice(6).trim();
-          else if (line.startsWith("data:")) {
-            const d = JSON.parse(line.slice(5).trim());
-            if (ev === "data") {
-              seconds++; log.push(d.id);
-              if (d.coldStartMs !== undefined) coldStartMs = d.coldStartMs;
-              if (d.stdout) stdout.push(d.stdout);
-            }
-          }
-        }
-      }
+      const log = received.get(a.sessionId) ?? [];
+      for (const e of out.received) log.push(e);
       received.set(a.sessionId, log);
       return {
         secondsBilled: seconds, coldStartMs,
-        stdout: stdout.join("\n").slice(0, 6000),
-        note: "You were charged for the seconds above. Unused credits are refunded when you close the session.",
+        ranOutOfCredits: paused > 0,
+        topUpsPurchased: topUps, resumedAfterTopUp: resumed,
+        ...(topUpError ? { topUpFailed: topUpError } : {}),
+        terminated: out.terminated?.cause ?? null,
+        ...clipOutput(stdout.join("\n")),
+        note: "You were charged only for the seconds above. Time spent paused with " +
+              "zero credits is not billed. Unused credits are refunded when you close.",
       };
     },
   });
 
-  return [discover, open_session, run_compute, stream, close_session, verify_session, spend_report];
+  return [discover, open_session, run_compute, top_up, stream, close_session, verify_session, spend_report];
 }
