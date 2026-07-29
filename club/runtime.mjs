@@ -543,13 +543,30 @@ function buildTools(run) {
  * the job being impossible, and throwing the whole run away over it wastes
  * both the money already spent and the machine still held.
  */
-const TRANSIENT = /response failed|fetch failed|socket|ECONNRESET|ETIMEDOUT|502|503|504|overloaded|rate.?limit|timeout/i;
+const TRANSIENT = /response failed|fetch failed|socket|ECONNRESET|ETIMEDOUT|502|503|504|overloaded|rate.?limit|timeout|did not finish within/i;
+
+/**
+ * How long one model turn may take before we call it hung.
+ *
+ * Generous, because a turn legitimately spans minutes of tool work. But not
+ * unbounded: a run was watched sitting at "Working" for sixteen minutes with
+ * its machine already gone and nothing left to wait for. Without a ceiling a
+ * stalled upstream request pins a run forever, and if a machine is still held
+ * it bills the whole time.
+ */
+const TURN_TIMEOUT_MS = Number(env.TURN_TIMEOUT_MS ?? 20 * 60_000);
+
+const withTimeout = (p, ms, what) => Promise.race([
+  p,
+  new Promise((_, rej) =>
+    setTimeout(() => rej(new Error(`${what} did not finish within ${Math.round(ms / 60000)} minutes`)), ms)),
+]);
 
 async function drive(run, opts) {
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      return await driveOnce(run, opts);
+      return await withTimeout(driveOnce(run, opts), TURN_TIMEOUT_MS, "the model turn");
     } catch (e) {
       lastErr = e;
       if (!TRANSIENT.test(e?.message ?? "") || attempt === 3) throw e;
