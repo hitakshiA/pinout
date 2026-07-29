@@ -323,26 +323,48 @@ export async function settleExpired(ctx, sessions, cause = CAUSE.MAX_DURATION) {
     cause,
   });
 
+  // One buyer's refund must not be able to strand everybody else's.
+  //
+  // This loop used to throw on the first failed transfer. Every session after
+  // it kept its money and stayed in SETTLING, and because the anchor for the
+  // whole batch had already been written, the retry could not reuse it. Three
+  // abandoned sessions sat holding 3 HBAR of committed credit through repeated
+  // sweeps for exactly this reason. A refund that fails is one buyer's problem
+  // and gets retried on the next sweep; it is not grounds for holding the rest
+  // of the batch hostage.
   const refunds = [];
+  const failed = [];
   for (const s of due) {
     const unused = Math.max(0, s.paidTinybar - s.burned * s.pricePerEvent);
-    if (unused > 0 && !s.refund) {
-      const resp = await (await new TransferTransaction()
-        .addHbarTransfer(ctx.seller, Hbar.fromTinybars(-unused))
-        .addHbarTransfer(AccountId.fromString(s.payer), Hbar.fromTinybars(unused))
-        .setTransactionMemo(`pinout expire ${s.id.slice(0, 8)}`)
-        .freezeWith(ctx.client).sign(ctx.key)).execute(ctx.client);
-      const st = (await resp.getReceipt(ctx.client)).status.toString();
-      if (st !== "SUCCESS") throw new Error(`expiry refund failed: ${st}`);
-      s.refund = { txId: resp.transactionId.toString(), tinybar: unused };
-      refunds.push(s.refund);
+    try {
+      if (unused > 0 && !s.refund) {
+        const resp = await (await new TransferTransaction()
+          .addHbarTransfer(ctx.seller, Hbar.fromTinybars(-unused))
+          .addHbarTransfer(AccountId.fromString(s.payer), Hbar.fromTinybars(unused))
+          .setTransactionMemo(`pinout expire ${s.id.slice(0, 8)}`)
+          .freezeWith(ctx.client).sign(ctx.key)).execute(ctx.client);
+        const st = (await resp.getReceipt(ctx.client)).status.toString();
+        if (st !== "SUCCESS") throw new Error(st);
+        s.refund = { txId: resp.transactionId.toString(), tinybar: unused };
+        refunds.push(s.refund);
+      }
+      s.credits = 0;
+      s.state = "CLOSED";
+      s.settlementResult = { settlement: anchor, refund: s.refund, unused,
+        terminate: { type: "SessionTerminate", session: s.id, cause } };
+    } catch (e) {
+      // Put it back where the next sweep will find it. Leaving it in SETTLING
+      // is what made these sessions invisible to `expired` and permanent.
+      s.state = "ACTIVE";
+      s.refundError = { at: Date.now(), message: e.message, owedTinybar: unused };
+      failed.push({ session: s.id, owedTinybar: unused, error: e.message });
     }
-    s.credits = 0;
-    s.state = "CLOSED";
-    s.settlementResult = { settlement: anchor, refund: s.refund, unused,
-      terminate: { type: "SessionTerminate", session: s.id, cause } };
   }
-  return { anchor, sessions: due.length, refunds };
+  if (failed.length) {
+    console.error(`expiry refund failed for ${failed.length} session(s), will retry:`,
+      failed.map((f) => `${f.session.slice(0, 8)} owes ${f.owedTinybar} (${f.error})`).join("; "));
+  }
+  return { anchor, sessions: due.length, refunds, failed };
 }
 
 
