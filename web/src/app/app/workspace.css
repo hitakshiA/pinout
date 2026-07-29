@@ -360,3 +360,14 @@
 .ws-agent .ws-hr { border: none; border-top: 1px solid var(--ws-line); margin: 1.3em 0; }
 /* pre-wrap fought the block elements once they existed */
 .ws-agent { white-space: normal; }
+
+/* what was decided about money, kept rather than deleted */
+.ws-decision {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  font-size: 13px; color: var(--ws-muted);
+  border-left: 2px solid var(--ws-line-2); padding: 2px 0 2px 12px;
+}
+.ws-decision[data-v="approve"] { border-left-color: var(--ws-good); }
+.ws-decision[data-v="deny"] { border-left-color: var(--ws-bad); }
+.ws-decision[data-v="revise"] { border-left-color: var(--ws-warn); }
+.ws-decision em { color: var(--ws-dim); font-style: italic; }

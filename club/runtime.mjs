@@ -237,7 +237,13 @@ export class Run extends EventEmitter {
   }
 
   say(type, data = {}) {
-    const ev = { type, at: Date.now(), ...data };
+    // Every event names the chat it belongs to.
+    //
+    // The stream is per workspace but a workspace holds many chats, and a
+    // client with no way to tell them apart will fold a running chat's prose,
+    // spend requests and artifacts into whichever chat happens to be open.
+    // With money on screen that is not a cosmetic bug.
+    const ev = { type, at: Date.now(), threadId: this.threadId, ...data };
     this.log.push(ev);
     if (this.log.length > 800) this.log.splice(0, this.log.length - 800);
     this.emit("event", ev);
@@ -252,7 +258,7 @@ export class Run extends EventEmitter {
    * artifacts that replay actually needs.
    */
   live(type, data = {}) {
-    const ev = { type, at: Date.now(), ...data };
+    const ev = { type, at: Date.now(), threadId: this.threadId, ...data };
     this.emit("event", ev);
     return ev;
   }
@@ -725,7 +731,9 @@ export async function decide(workspaceId, { verdict, feedback }) {
   const { callId, ask } = run.pendingApproval;
   run.approvals.push({ at: Date.now(), verdict, feedback, ask });
   run.pendingApproval = null;
-  run.say("decision", { verdict, feedback, callId });
+  // carry the ask along, so a client can render what was decided rather than
+  // just that something was
+  run.say("decision", { verdict, feedback, callId, ask });
 
   const go = async (args) => {
     const out = await drive(run, args);

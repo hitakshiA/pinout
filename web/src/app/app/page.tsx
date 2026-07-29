@@ -25,6 +25,7 @@ type Block =
   | { k: "agent"; id: string; text: string; tools: string[]; streaming?: boolean }
   | { k: "ask"; id: string; ev: RunEvent }
   | { k: "artifact"; id: string; name: string; bytes: number; kind: string }
+  | { k: "decision"; id: string; verdict: string; amount: number; feedback: string | null }
   | { k: "note"; id: string; text: string; tone?: "warn" | "bad" };
 
 export default function Workspace() {
@@ -95,8 +96,20 @@ export default function Workspace() {
       for (const a of c.artifacts) {
         seed.push({ k: "artifact", id: a.id, name: a.name, bytes: a.bytes, kind: "Artifact" });
       }
+      // A reload used to lose the spend request: it was read into state and
+      // never rendered, so the run sat waiting with no Approve or Deny anywhere
+      // on the page. The card is rebuilt from the run's own log, which holds
+      // the full ask rather than just the arguments.
+      const pending = c.run?.awaitingApproval;
+      if (pending) {
+        const fromLog = [...(c.run?.log ?? [])].reverse()
+          .find((e) => e.type === "approval_needed") as RunEvent | undefined;
+        const ev = fromLog ?? ({ type: "approval_needed", at: Date.now(),
+                                 ...(pending.ask as object) } as RunEvent);
+        seed.push({ k: "ask", id: `ask-${pending.callId}`, ev });
+        setAsk(ev);
+      } else setAsk(null);
       setBlocks(seed);
-      setAsk(c.run?.awaitingApproval ? ({ ...(c.run.awaitingApproval.ask as object) } as RunEvent) : null);
     })().catch(() => {});
   }, [ws, chatId]);
 
@@ -127,8 +140,18 @@ export default function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws]);
 
+  // the open chat, readable from inside the stream handler without
+  // re-subscribing the stream every time the selection changes
+  const openChat = useRef<string | null>(null);
+  useEffect(() => { openChat.current = chatId; }, [chatId]);
+
   /** Fold one event into the transcript. */
   const handle = useCallback((ev: RunEvent) => {
+    // Events are per workspace, chats are not. Without this, a run in one chat
+    // writes its prose, its spend request and its artifacts into whichever
+    // chat the user happens to be looking at.
+    if (ev.threadId && openChat.current && ev.threadId !== openChat.current) return;
+    if (ev.type === "ping") return;
     const id = `${ev.type}-${ev.at}-${Math.random().toString(36).slice(2, 7)}`;
     switch (ev.type) {
       case "text": {
@@ -166,10 +189,20 @@ export default function Workspace() {
         setAsk(ev);
         setBlocks((b) => [...b, { k: "ask", id, ev }]);
         break;
-      case "decision":
+      case "decision": {
+        // Replace the card with what was decided. Deleting it outright threw
+        // away the only record that money had been asked for and answered,
+        // which is exactly the thing worth keeping.
         setAsk(null);
-        setBlocks((b) => b.filter((x) => x.k !== "ask"));
+        const verdict = String(ev.verdict ?? "");
+        const amt = Number((ev.ask as Record<string, unknown> | undefined)?.requestTinybar ?? 0);
+        setBlocks((b) => [
+          ...b.filter((x) => x.k !== "ask"),
+          { k: "decision", id, verdict,
+            amount: amt, feedback: ev.feedback ? String(ev.feedback) : null },
+        ]);
         break;
+      }
       case "funding_needed":
         setWorking({ what: `Waiting for ${hbar(Number(ev.needTinybar))}`, since: Date.now() });
         break;
@@ -369,6 +402,20 @@ export default function Workspace() {
                   return (
                     <div className="ws-turn" key={b.id}>
                       <FundingAsk ev={b.ev} onDecide={decide} busy={busy} />
+                    </div>
+                  );
+                }
+                if (b.k === "decision") {
+                  return (
+                    <div className="ws-turn ws-in" key={b.id}>
+                      <div className="ws-decision" data-v={b.verdict}>
+                        <span>
+                          You {b.verdict === "approve" ? "approved" :
+                               b.verdict === "revise" ? "sent back" : "denied"}
+                          {b.amount ? ` ${hbar(b.amount)}` : ""}
+                        </span>
+                        {b.feedback && <em>{b.feedback}</em>}
+                      </div>
                     </div>
                   );
                 }
