@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="200" viewBox="0 0 760 200" role="img" aria-label="Pinout">
+  <defs>
+    <linearGradient id="m" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a98bff"/><stop offset="1" stop-color="#5b34c9"/>
+    </linearGradient>
+    <linearGradient id="halo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8259ef" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#8259ef" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="760" height="200" fill="none"/>
+  <ellipse cx="380" cy="96" rx="330" ry="86" fill="url(#halo)"/>
+  <!-- the mark: a pin seated in a socket, which is what a pinout is -->
+  <g transform="translate(196,58)">
+    <rect width="84" height="84" rx="24" fill="url(#m)"/>
+    <rect x="30" y="30" width="24" height="24" rx="7" fill="#06040d"/>
+  </g>
+  <text x="304" y="128" font-family="Inter, SF Pro Display, Segoe UI, Helvetica Neue, Arial, sans-serif"
+        font-size="76" font-weight="700" letter-spacing="-2.6" fill="#ffffff">Pinout</text>
+</svg>

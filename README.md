@@ -1,6 +1,10 @@
 <div align="center">
 
-# Pinout
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./assets/logo-light.svg">
+  <img src="./assets/logo-dark.svg" alt="Pinout" width="420">
+</picture>
 
 **Metered payments and settlement for agents, on [x402](https://x402.org) and [Hedera](https://hedera.com).**
 
