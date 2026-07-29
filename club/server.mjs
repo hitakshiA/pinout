@@ -49,6 +49,7 @@ app.get("/", (c) => c.json({
     fundDirect: "POST /workspace/:id/chats/:chatId/fund-direct  (no browser wallet)",
     chatWithdraw: "POST /workspace/:id/chats/:chatId/withdraw  (to any address)",
     chatClose: "POST /workspace/:id/chats/:chatId/close",
+    close: "POST /workspace/:id/close  (every chat's wallet goes home)",
     attach: "POST /workspace/:id/files",
     listFiles: "GET /workspace/:id/files",
     download: "GET /workspace/:id/files/:assetId",
@@ -513,6 +514,23 @@ app.post("/workspace/:id/chats/:chatId/close", async (c) => {
   if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
   try { return c.json(await rt.closeChat(t.id)); }
   catch (e) { return c.json({ error: e.message }, 500); }
+});
+
+/**
+ * Close the whole workspace: every chat's wallet goes home and its sessions
+ * settle first, then the workspace shuts.
+ *
+ * This route went missing when chats were introduced, and nothing noticed
+ * until a test asked for it. Losing it means a user has no way to end a
+ * workspace and reclaim what its chats are holding.
+ */
+app.post("/workspace/:id/close", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  try {
+    return c.json(await rt.closeWorkspace(a.w.id));
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
 });
 
 app.get("/health", async (c) => c.json({
