@@ -168,6 +168,11 @@ async function main() {
 
   const handle = async (ev) => {
     switch (ev.type) {
+      case "reasoning":
+      case "text":
+        // deltas: a real UI types these out; here they only prove they arrive
+        process.stdout.write(ev.type === "reasoning" ? C.dim(ev.delta) : ev.delta);
+        break;
       case "tool":
         console.log(C.dim(`  ${ev.name} ${String(ev.args ?? "").slice(0, 110)}`));
         break;

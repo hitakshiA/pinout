@@ -225,6 +225,19 @@ export class Run extends EventEmitter {
     return ev;
   }
 
+  /**
+   * Emit without recording. Token deltas arrive in the thousands and are only
+   * meaningful while they are arriving: a client that reconnects wants the
+   * finished answer, not to watch it typed again. Keeping them out of the log
+   * also stops a few seconds of streaming evicting the funding events and
+   * artifacts that replay actually needs.
+   */
+  live(type, data = {}) {
+    const ev = { type, at: Date.now(), ...data };
+    this.emit("event", ev);
+    return ev;
+  }
+
   setState(s, extra = {}) {
     this.state = s;
     ws.update(this.workspaceId, { state: s });
@@ -439,6 +452,33 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
     ...(approveToolCalls ? { approveToolCalls } : {}),
     ...(rejectToolCalls ? { rejectToolCalls } : {}),
   });
+
+  // A UI that only receives finished events can only draw a spinner. These
+  // three streams are what let it show the agent thinking, calling something,
+  // and composing an answer, in the order those things actually happen.
+  //
+  // Consumed concurrently on purpose: the SDK multiplexes one underlying
+  // stream to several readers, so this costs nothing extra.
+
+  // the model's reasoning, token by token
+  (async () => {
+    try {
+      let seq = 0;
+      for await (const delta of result.getReasoningStream()) {
+        if (delta) run.live("reasoning", { delta, seq: seq++ });
+      }
+    } catch { /* not every model emits reasoning */ }
+  })();
+
+  // the answer as it is written, so text can type itself out
+  (async () => {
+    try {
+      let seq = 0;
+      for await (const delta of result.getTextStream()) {
+        if (delta) run.live("text", { delta, seq: seq++ });
+      }
+    } catch { /* stream ends with the turn */ }
+  })();
 
   // Tool calls stream out as they happen so the UI shows work, not a spinner.
   (async () => {
