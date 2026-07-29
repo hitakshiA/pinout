@@ -164,9 +164,16 @@ export class Run extends EventEmitter {
     this.setState(RUN_STATE.FUNDING, { needTinybar, reason });
     this.say("funding_needed", { needTinybar, reason });
     return new Promise((resolve, reject) => {
-      this.fundingWaiter = resolve;
+      // A run parked for money is live work, not idle. Without something
+      // holding the event loop a headless process exits here while a rented
+      // machine is still billing, and the exit looks exactly like success.
+      // The timer is deliberately NOT unref'd for that reason.
+      const hold = setInterval(() => {}, 30_000);
+      const done = (fn) => (v) => { clearInterval(hold); fn(v); };
+
+      this.fundingWaiter = done(resolve);
       this.abort.signal.addEventListener(
-        "abort", () => reject(new Error("run cancelled while waiting for funding")),
+        "abort", () => done(reject)(new Error("run cancelled while waiting for funding")),
         { once: true }
       );
     });

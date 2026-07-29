@@ -114,6 +114,34 @@ export async function confirmFunding({ accountId, funderAccountId, expectTinybar
   return { ok: false };
 }
 
+/**
+ * Send HBAR into a workspace account.
+ *
+ * In the browser this is the user's own wallet signing a transfer, and the
+ * server only ever confirms it afterwards. This exists so a headless harness
+ * can stand in for that signature; it is not on the request path for a real
+ * user, and it deliberately pays from the operator rather than pretending to
+ * be anyone else.
+ */
+export async function sendToWorkspace({ accountId, tinybar, from }) {
+  const client = operator();
+  try {
+    const resp = await new TransferTransaction()
+      .addHbarTransfer(AccountId.fromString(from), Hbar.fromTinybars(-tinybar))
+      .addHbarTransfer(AccountId.fromString(accountId), Hbar.fromTinybars(tinybar))
+      .setTransactionMemo("pinout.club top-up")
+      .execute(client);
+    const receipt = await resp.getReceipt(client);
+    return {
+      ok: receipt.status.toString() === "SUCCESS",
+      txId: resp.transactionId.toString(),
+      tinybar,
+    };
+  } finally {
+    client.close();
+  }
+}
+
 export async function balanceOf(accountId) {
   const client = operator();
   try {

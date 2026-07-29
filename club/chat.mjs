@@ -15,7 +15,7 @@ import { env } from "../src/config.mjs";
 import * as ws from "./workspace.mjs";
 import * as assets from "./assets.mjs";
 import * as rt from "./runtime.mjs";
-import { CUSTODY_DISCLOSURE, balanceOf } from "./wallet.mjs";
+import { CUSTODY_DISCLOSURE, balanceOf, sendToWorkspace } from "./wallet.mjs";
 
 const C = {
   dim: (s) => `\x1b[2m${s}\x1b[0m`,
@@ -149,13 +149,32 @@ async function main() {
     }
 
     if (ev.type === "funding_needed") {
-      // stand in for the user signing a transfer in the browser
+      // Stand in for the user signing a transfer in the browser.
+      //
+      // On the first funding the server opens the account, which moves the
+      // money itself. On a top-up the account already exists, so somebody has
+      // to actually send HBAR before the server can confirm anything. Missing
+      // this is what killed the first top-up: the agent asked, nothing was
+      // transferred, confirmFunding correctly found no new deposit, and the
+      // run sat on a promise nobody would ever resolve.
       try {
-        const out = await rt.applyFunding(workspace.id, {
-          funderAccountId: funder,
-          expectTinybar: ev.needTinybar,
-        });
-        if (out.pending) console.log(C.bad("  transfer not seen on chain yet"));
+        const w = ws.get(workspace.id);
+        if (w?.wallet) {
+          const sent = await sendToWorkspace({
+            accountId: w.wallet.accountId, tinybar: ev.needTinybar, from: funder,
+          });
+          console.log(C.dim(`  sent ${hbar(sent.tinybar)}  ${sent.txId}`));
+        }
+        // the mirror node lags the transaction, so confirmation is retried
+        let out = null;
+        for (let i = 0; i < 12; i++) {
+          out = await rt.applyFunding(workspace.id, {
+            funderAccountId: funder, expectTinybar: ev.needTinybar,
+          });
+          if (!out.pending) break;
+          await new Promise((r) => setTimeout(r, 2500));
+        }
+        if (out?.pending) console.log(C.bad("  transfer never showed on the mirror node"));
       } catch (e) { console.log(C.bad(`  funding failed: ${e.message}`)); }
     }
 
