@@ -107,8 +107,20 @@ export const compute = {
       // wait for a top-up. Killing the sandbox the instant the balance hits zero
       // destroys work the buyer already paid for — they top up and discover the
       // job is gone. The seller eats the held seconds during grace, which is why
-      // it is short and bounded.
-      const graceMs = Number(env.EXHAUSTION_GRACE_MS ?? 90_000);
+      // it is bounded.
+      //
+      // It was 90 seconds, which is fine when an agent refills itself and far
+      // too short when a human has to approve the spend. The observed sequence
+      // was always the same: credits hit zero, the agent asked for money, a
+      // person read the request and signed a transfer, and the machine was torn
+      // down with the job on it before the payment confirmed. Then the agent
+      // rented a second machine and started over, and the buyer paid for both.
+      //
+      // Four minutes covers a human who is actually paying attention. It costs
+      // the seller idle seconds on a machine nobody is using, and that is the
+      // cheaper of the two mistakes: the alternative is charging someone for
+      // work that is then thrown away.
+      const graceMs = Number(env.EXHAUSTION_GRACE_MS ?? 240_000);
       // A paused stream used to emit ONE frame and then go silent for up to the
       // full grace period. Any idle timeout between buyer and server killed the
       // connection during that silence, so a buyer who DID top up in time found
