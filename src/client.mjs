@@ -140,6 +140,20 @@ export class PinoutClient {
    * legitimately slower than a normal request. The default fetch timeout is
    * too short for it.
    */
+  /**
+   * Current server-side view of a session: state, credits, burned.
+   * Every real integration needs this — "how much do I have left?" should not
+   * require hand-rolling a fetch with the right bearer header.
+   */
+  async status(sessionId) {
+    const secret = this.secrets.get(sessionId);
+    const r = await fetch(`${this.base}/session/${sessionId}`,
+      secret ? { headers: { Authorization: `Bearer ${secret}` } } : undefined);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(body.error ?? `status ${r.status}`); e.status = r.status; throw e; }
+    return body;
+  }
+
   async close(sessionId, cause, { timeoutMs = 120000, settlement } = {}) {
     const q = new URLSearchParams();
     if (cause) q.set("cause", cause);
@@ -158,7 +172,7 @@ export class PinoutClient {
    * the top-up threshold — the socket is NOT dropped to top up.
    */
   async stream(sessionId, { n = 500, provider, code, prompt, onEvent, onLow, onCheckpoint,
-                            onPaused, onResumed } = {}) {
+                            onPaused, onResumed, onWaiting } = {}) {
     const q = new URLSearchParams({ n: String(n) });
     if (provider) q.set("provider", provider);
     if (prompt) q.set("prompt", prompt);
@@ -207,6 +221,9 @@ export class PinoutClient {
               // The machine is held, not billing. Top up and the SAME job continues.
               onPaused?.(data);
               await onLow?.({ ...data, remainingUnits: 0 });
+            } else if (event === "SessionWaiting") {
+              // Grace ticking down while we wait for a top-up. Not billed.
+              onWaiting?.(data);
             } else if (event === "SessionResumed") {
               onResumed?.(data);
             } else if (event === "SessionTerminate") terminated = data;

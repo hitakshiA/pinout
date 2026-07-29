@@ -752,6 +752,7 @@ app.get("/session/:id/stream", (c) => {
     }
     const jobCode = s.stagedCode
       ?? (inline ? Buffer.from(inline, "base64").toString("utf8") : undefined);
+    try {
     for await (const ev of provider.stream({
       n, prompt: c.req.query("prompt"),
       // Lane comes from the SESSION, never the request — otherwise a caller
@@ -766,9 +767,15 @@ app.get("/session/:id/stream", (c) => {
           note: ev.note, creditsRemaining: s.credits }) });
         break;
       }
+      if (ev.waiting) {
+        // Keeps the SSE channel alive while credits are zero. Never billed.
+        await stream.writeSSE({ event: "SessionWaiting",
+          data: JSON.stringify({ ...ev, credits: s.credits, sessionId: s.id }) });
+        continue;
+      }
       if (ev.paused || ev.resumed) {
         await stream.writeSSE({ event: ev.paused ? "SessionPaused" : "SessionResumed",
-          data: JSON.stringify({ ...ev, credits: s.credits, sessionId: s.id }) });
+          data: JSON.stringify({ ...ev, credits: s.credits, sessionId: s.id, balance: s.credits }) });
         continue;   // not billed
       }
       if (!s.burn(ev.id)) {
@@ -804,7 +811,24 @@ app.get("/session/:id/stream", (c) => {
       }
     }
     await stream.writeSSE({ event: "done", data: JSON.stringify({ sent, credits: s.credits }) });
-    s._streaming = false;
+    } catch (e) {
+      // A provider fault used to end the SSE with no frame at all, which is
+      // indistinguishable from a dropped network connection — the buyer cannot
+      // tell "your job crashed" from "your wifi blinked", and retries blindly.
+      // The session stays OPEN so nothing already paid for is lost: close it to
+      // be refunded, or stream again.
+      console.error(`stream error on ${s.id}:`, e);
+      try {
+        await stream.writeSSE({ event: "SessionTerminate", data: JSON.stringify({
+          type: "SessionTerminate", session: s.id, cause: CAUSE.PROVIDER_ERROR,
+          error: e.message, creditsRemaining: s.credits,
+          note: "the session is still open and your remaining credits are intact — " +
+                "stream again, or close to be refunded",
+        }) });
+      } catch { /* socket already gone */ }
+    } finally {
+      s._streaming = false;
+    }
   });
 });
 

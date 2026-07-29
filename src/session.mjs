@@ -28,6 +28,7 @@ export const CAUSE = {
   SERVER_SHUTDOWN: "server-shutdown",
   CLIENT_DISCONNECT: "client-disconnect",
   POLICY_VIOLATION: "policy-violation",
+  PROVIDER_ERROR: "provider-error",
 };
 
 export class Session {

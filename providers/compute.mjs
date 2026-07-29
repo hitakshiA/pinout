@@ -72,7 +72,11 @@ export const compute = {
       // seconds stop meaning seconds. A held machine costs real wall-clock time
       // whatever our loop is doing, so the tick index is derived from elapsed
       // time and liveness is polled off the hot path.
-      const meterStart = Date.now();
+      // `let`, not `const`: resuming from a pause rebases this so the buyer is
+      // not billed for the paused window. It was const, so the resume branch
+      // threw 'Assignment to constant variable' the instant a top-up landed —
+      // the stream died at the exact moment the buyer paid to continue.
+      let meterStart = Date.now();
       let emitted = 0, alive = true;
 
       // Liveness polls on its own cadence; its latency cannot drift the meter.
@@ -86,7 +90,13 @@ export const compute = {
       // job is gone. The seller eats the held seconds during grace, which is why
       // it is short and bounded.
       const graceMs = Number(env.EXHAUSTION_GRACE_MS ?? 90_000);
-      let pausedAt = null;
+      // A paused stream used to emit ONE frame and then go silent for up to the
+      // full grace period. Any idle timeout between buyer and server killed the
+      // connection during that silence, so a buyer who DID top up in time found
+      // the stream already dead — it paid for credits it could never spend.
+      // The wait frames keep the channel alive and show the grace draining.
+      const WAIT_EVERY_MS = Number(env.EXHAUSTION_HEARTBEAT_MS ?? 5_000);
+      let pausedAt = null, lastWaitAt = 0;
 
       try {
         while (emitted < n && alive) {
@@ -100,10 +110,19 @@ export const compute = {
           if (typeof onBalance === "function" && onBalance() <= 0) {
             if (pausedAt === null) {
               pausedAt = Date.now();
+              lastWaitAt = pausedAt;
               yield { id: `pause-${emitted}`, i: emitted, unit: "second", lane,
                       provider: spec.provider, paused: true, billed: false,
                       graceSeconds: Math.floor(graceMs / 1000),
                       stdout: "", note: "credits exhausted — machine held, not billing. Top up to continue." };
+            }
+            if (Date.now() - lastWaitAt >= WAIT_EVERY_MS) {
+              lastWaitAt = Date.now();
+              const left = Math.max(0, Math.ceil((graceMs - (Date.now() - pausedAt)) / 1000));
+              yield { id: `wait-${emitted}-${left}`, i: emitted, unit: "second", lane,
+                      provider: spec.provider, waiting: true, billed: false, stdout: "",
+                      graceSecondsRemaining: left,
+                      note: `awaiting top-up — ${left}s of grace left before the machine is released` };
             }
             if (Date.now() - pausedAt > graceMs) {
               // Tell the client WHY the stream is ending. Silently closing the
