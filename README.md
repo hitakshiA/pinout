@@ -1,49 +1,252 @@
 <div align="center">
 
-# Pinout Compute
+# Pinout
 
-**Rent a real machine by the second. Pay over [x402](https://x402.org) on [Hedera](https://hedera.com). Get refunded for every second you don't use.**
+**Metered payments and settlement for agents, on [x402](https://x402.org) and [Hedera](https://hedera.com).**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![x402](https://img.shields.io/badge/x402-v2%20%C2%B7%20exact-6366f1)](https://docs.x402.org)
 [![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
 
-CPU boxes and NVIDIA accelerators from a T4 up to a B300, billed per second held.
-One payment buys seconds. Running out pauses the machine instead of killing it, so a
-top up resumes the same process where it stopped. Unused seconds are refunded on chain,
-and **anyone can recompute the bill from the public ledger**.
+x402 lets an agent pay for a request with a known price. Most of what an agent needs
+isn't priced that way: compute is charged by the second, inference by the token,
+bandwidth and data feeds by the unit. Neither side knows the total before the work runs.
+
+**Pinout extends x402 from fixed-price requests to metered sessions.** One payment opens
+a pool of credits, a meter burns them as work happens, the agent tops up mid-session
+without losing its work, and every unused credit is refunded on-chain. The human sets a
+spending ceiling. The agent decides what to buy, how long to hold it, and when to stop.
+
+**[Pinout Compute](#pinout-compute)** is the first service built on it: CPU and NVIDIA
+GPU machines an agent rents by the second.
 
 </div>
 
 ```js
-const m = await client.rent("gpu-b200");           // pays over x402, machine comes up
+// an agent, holding its own wallet, renting its own machine
+const m = await client.rent("gpu-b200");            // 402 -> sign -> settle -> machine up
 await m.upload("/work/train.csv", data);
-await m.exec("import torch; ...");                  // state persists between calls
-const model = await m.download("/work/model.pt");   // sha256 checked in transit
-await m.release();                                  // unused seconds refunded on chain
+await m.exec("import torch; ...");                   // state persists between calls
+const model = await m.download("/work/model.pt");    // sha256 checked in transit
+await m.release();                                   // unused seconds refunded on-chain
 ```
 
 ---
 
 ## Table of contents
 
+- [How Pinout works](#how-pinout-works)
+- [Why Hedera](#why-hedera)
+- [The two tier ledger](#the-two-tier-ledger)
+- [Verification](#verification)
+- [Pinout Compute](#pinout-compute)
 - [Hardware and pricing](#hardware-and-pricing)
 - [What a machine can do](#what-a-machine-can-do)
 - [Two shapes of work](#two-shapes-of-work)
 - [Running out mid job](#running-out-mid-job)
 - [For AI agents](#for-ai-agents)
-- [Why this needs a new payment primitive](#why-this-needs-a-new-payment-primitive)
-- [How the meter works](#how-the-meter-works)
-- [The two tier ledger](#the-two-tier-ledger)
-- [Verification](#verification)
 - [Guards](#guards)
 - [Quickstart](#quickstart)
 - [API](#api)
 - [Token streams, the other workload](#token-streams-the-other-workload)
-- [Why Hedera](#why-hedera)
 - [Configuration](#configuration)
 - [Status and known limits](#status-and-known-limits)
+
+---
+
+## How Pinout works
+
+This isn't a hypothesis. Hedera's own x402 documentation says so, under
+[**Requirements and limitations**](https://docs.hedera.com/solutions/ai/x402):
+
+> Settlement is per-request and discrete. x402 is **not built for streaming payments**
+> or multi-hop routing across ledgers.
+>
+> [Hedera docs, x402](https://docs.hedera.com/solutions/ai/x402)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Pinout server
+    participant F as x402 facilitator
+    participant H as Hedera
+
+    C->>S: POST /compute/gpu-b200
+    S-->>C: 402 + PAYMENT-REQUIRED<br/>(signed offer, price, feePayer)
+    C->>C: sign bare TransferTransaction
+    C->>S: retry + PAYMENT-SIGNATURE
+    S->>F: verify
+    F-->>S: valid
+    S-->>C: 200 · seconds + session secret
+    S->>F: settle (after handler succeeds)
+    F->>H: submit, facilitator pays ALL gas
+    Note over C,H: buyer's balance moves by exactly the price
+
+    loop every second held
+        S-->>C: SSE tick · 1 second burned
+    end
+    S->>H: burn checkpoint → plain HCS topic
+    Note over C,S: seconds low → top-up 402 cycle<br/>the machine never stops
+
+    C->>S: POST /close
+    S->>H: refund unused seconds
+    S->>H: HIP-991 settlement anchor<br/>(costs the seller ~0.73 ℏ)
+    S-->>C: signed receipt (JWS/ES256K)
+```
+
+**Credit is derived from the settled on chain transfer, never from a price table.**
+A session can only ever be credited with the amount that actually moved to the seller in
+the transaction the buyer signed. This is structural. Three separate money bugs in this
+codebase were the same shape, a flat priced 402 plus a credit read from a lane table plus
+an on chain refund of the difference, and deriving credit from the transfer makes that
+class impossible rather than fixing it three times.
+
+The refund is **not** gated behind the anchor. Gating it meant an anchor failure stranded
+a buyer's balance. The anchor is queued and swept instead, and the verifier reports
+`PENDING_ANCHOR` (exit 3) rather than accusing an honest seller during the window before
+it lands.
+
+---
+
+---
+
+## Why Hedera
+
+| Property | What it buys |
+|---|---|
+| **Fee payer model** | The facilitator pays all network fees. The buyer needs **no fee headroom**, so it can hold exactly the purchase amount and transact. |
+| **HIP-991 topic fees** | A log that **costs money to write**, ~0.7345 HBAR per settlement anchor in irrecoverable network fees, so publishing your final numbers is expensive and over reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a collector fixed at topic creation, **not** to the paying buyer. |
+| **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
+| **Free mirror node** | Public, unauthenticated, no signup, so verification costs the buyer nothing. |
+
+---
+
+---
+
+## The two tier ledger
+
+The original design checkpointed everything to a HIP-991 fee charging topic. Measurement
+killed it:
+
+| Payload | Plain HCS topic | HIP-991 topic |
+|--------:|----------------:|--------------:|
+|   100 B |       $0.00017  |    **$0.0500** |
+| 1,000 B |       $0.00078  |    **$0.0500** |
+| 4,000 B |       $0.00080  |    **$0.0500** |
+
+A fee charging topic costs a **flat ~$0.050 per message, 62x a plain topic, independent
+of payload size *and* of the fee amount.** So the meter is split:
+
+```mermaid
+flowchart LR
+    subgraph T1["Tier 1 · burn ledger"]
+        A["plain HCS topic<br/>~$0.0008/write<br/>every N seconds"]
+    end
+    subgraph T2["Tier 2 · settlement anchor"]
+        B["HIP-991 topic<br/>~$0.050/write<br/>batched, rare"]
+    end
+    E[seconds held] --> A
+    A -->|"final seq + consensus running_hash"| B
+    B -->|"~0.73 ℏ network fee"| NET["Hedera network<br/>(irrecoverable)"]
+
+    style T1 stroke-dasharray: 4
+    style NET fill:#1a7f37,color:#fff
+```
+
+Tier 2 embeds tier 1's final `sequence_number` and consensus `running_hash`, so burn
+history cannot be restated without invalidating the anchor that committed to it.
+
+**Both tiers are HCS. There is no smart contract anywhere in this system.**
+
+Anchors are **batched by default**, one anchor covering many sessions. Per session
+anchoring costs ~0.73 HBAR against a session priced in thousandths of that, which turns
+abandonment into a drain. `?settlement=priority` buys a dedicated anchor, but only when
+the session's own revenue covers its cost. Otherwise it falls back to batched, because
+unconditional priority is a free way to make a stranger spend 0.73 HBAR per call.
+
+---
+
+---
+
+## Verification
+
+The verifier trusts **only** the free public mirror node and the buyer's own record of
+seconds received. No API key, nothing to trust.
+
+```bash
+npm run verify -- <sessionId>
+```
+
+```mermaid
+flowchart TD
+    V[verifier] --> M[(public mirror node)]
+    M --> C1{1 · checkpoints contiguous?}
+    C1 --> C2{2 · anchor binds ledger head?}
+    C2 --> C3{3 · settlement arithmetic?}
+    C3 --> C4{4 · burn count = seconds received?}
+    C4 --> C5{5 · commitments match?}
+    C5 --> P["exit 0 · PASSED"]
+    C4 -->|no| F["exit 1 · FAILED<br/>names the exact overcharge"]
+    C5 -->|no| F
+    C4 -.->|no client record| I["exit 2 · INCONCLUSIVE"]
+    C2 -.->|anchor not landed yet| W["exit 3 · PENDING_ANCHOR"]
+
+    style P fill:#1a7f37,color:#fff
+    style F fill:#b62324,color:#fff
+    style I fill:#9a6700,color:#fff
+    style W fill:#0969da,color:#fff
+```
+
+One implementation, shared by the CLI, the MCP tool and the Agent Kit plugin. The
+artifact whose entire job is to be trustworthy should not exist twice and disagree with
+itself.
+
+### Watch it catch a cheating seller
+
+```bash
+npm run e2e -- --cheat 400        # seller inflates the ledger
+npm run verify -- <sessionId>     # exits 1
+```
+
+```
+1. contiguity              PASS
+2. tier binding            PASS
+3. settlement arithmetic   PASS
+4. ledger vs received      FAIL  claims 3000, client received 2600
+                                 (+400 phantom = 80000 tinybar overcharge)
+5. checkpoint commitments  FAIL  11/11 do not match
+```
+
+### Trust boundary
+
+Pinout claims a **tamper evident, independently recomputable consumption ledger**. It does
+**not** claim trustless delivery proof.
+
+Under `--cheat`, checks 1 to 3 still pass. The ledger genuinely is immutable and
+internally consistent, which is what HCS guarantees and all it guarantees. Only comparing
+it against the buyer's own record exposes fabrication. A seller that fabricates events
+*and* whose client never notices is outside what this proves.
+
+`INCONCLUSIVE` exists for exactly that reason. Without a client record, the verifier
+refuses to say "passed".
+
+---
+
+---
+
+## Pinout Compute
+
+The first service built on Pinout. An agent rents a real machine by the second, runs
+work on it, and hands it back, paying only for the seconds it held.
+
+The control split is deliberate. **You set the budget**, a hard ceiling the agent cannot
+exceed. **The agent picks the machine**, because it is the one that knows whether the job
+needs an accelerator or a small box. You decide how much. It decides what.
+
+Everything below (the catalogue, the rental model, the pause behaviour) runs on the
+metered-session primitive above, unchanged. One tick is one second held.
 
 ---
 
@@ -52,6 +255,10 @@ await m.release();                                  // unused seconds refunded o
 One credit is one second held. Every line below was verified by provisioning the lane
 and reading the device back off the machine itself, so the catalogue cannot advertise
 silicon it is unable to deliver.
+
+Each lane's price is committed **inside the 402 the agent signs**, and the lane is read
+from the **session**, never from the request. An agent cannot pay `cpu-1` prices and then
+ask for a B300, and it can never be charged a rate it did not agree to.
 
 ### Accelerator lanes
 
@@ -103,9 +310,12 @@ curl <host>/lanes
 
 ---
 
+---
+
 ## What a machine can do
 
-A lane gives you a real Linux container, not a sandboxed expression evaluator.
+A lane is a real Linux container, not a sandboxed expression evaluator. Everything here
+is reachable by the agent over the session API.
 
 | | |
 |---|---|
@@ -116,15 +326,17 @@ A lane gives you a real Linux container, not a sandboxed expression evaluator.
 | **Files out** | Download any file, checked against its sha256 in transit |
 | **Processes** | Full `subprocess`, shell commands, background work |
 | **State** | The filesystem persists between `exec` calls in one rental |
-| **Session length** | Up to 900 s on CPU lanes, 300 s on accelerator lanes, extendable by topping up |
+| **Session length** | Up to 900 s on CPU lanes, 300 s on accelerator lanes, extended by the agent topping up |
 | **Code size** | 64 KiB per `exec` call, or stage larger payloads as a file |
 
-Two limits worth knowing before you plan a job. Outbound network is filtered rather than
+Two limits worth knowing when an agent plans a job. Outbound network is filtered rather than
 open, so a job that fetches its own input should be tested rather than assumed.
-`os.cpu_count()` reports the host's core count, not your lane's quota, so size thread
-pools from the lane you bought rather than from what Python reports. The quota itself is
+`os.cpu_count()` reports the host's core count, not your lane's quota, so an agent should size thread
+pools from the lane it bought rather than from what Python reports. The quota itself is
 real: a parallel benchmark scores 4.14x higher on `cpu-4` than on `cpu-1`, matching the
 4x vCPU ratio you pay for.
+
+---
 
 ---
 
@@ -148,13 +360,12 @@ flowchart TB
     style RENT stroke-dasharray: 4
 ```
 
-**One-shot** suits a single known script. Submit it, it runs, the machine is handed back
-the moment it exits, and you are billed only for the seconds it actually ran.
+**One-shot** suits a single known script. The agent submits it, it runs, the machine is
+handed back the moment it exits, and only the seconds it actually ran are billed.
 
-**Rental** holds an idle machine so you can work on it. Run code, look at the result,
-decide what to do next, put files on it, take artifacts off it. This is what makes the
-service usable by an agent, which works by looking at what happened and choosing the
-next step.
+**Rental** holds an idle machine the agent works on. It runs code, looks at the result,
+decides what to do next, puts files on, takes artifacts off. This is the mode agents
+actually need, because an agent works by seeing what happened and choosing the next step.
 
 Verified on both fleets: upload 14,580 B, exec reads it and writes state, a *separate*
 exec reads that state back, download a 1 MB artifact with its sha256 checked in transit,
@@ -162,11 +373,13 @@ exit codes propagated, money balancing exactly.
 
 ---
 
+---
+
 ## Running out mid job
 
 Credits hitting zero does **not** kill the machine. It pauses: the machine is held, the
-meter stops, and `SessionWaiting` frames report the grace window draining. Top up and the
-*same process* resumes from exactly where it stopped.
+meter stops, and `SessionWaiting` frames report the grace window draining. The agent tops
+up and the *same process* resumes from exactly where it stopped.
 
 ```mermaid
 stateDiagram-v2
@@ -184,6 +397,8 @@ Measured on the live deployment: a 150 second job on a 120 second session paused
 124 s, was billed **zero** for 10 s of pause, resumed at **step 120, the step it stopped
 on, in the same still running process**, and finished. 180 credits bought, 141 billed,
 39 refunded, and the on chain verifier passed all five checks.
+
+---
 
 ---
 
@@ -271,181 +486,6 @@ node agent/chat.mjs -p "rent a GPU and…"  # headless
 
 ---
 
-## Why this needs a new payment primitive
-
-x402 pays for **one thing, once**. That breaks the moment consumption is continuous. You
-cannot sign a payment per second of compute, and you cannot pay upfront because neither
-party knows how long the work will run.
-
-This isn't a hypothesis. Hedera's own x402 documentation says so, under
-[**Requirements and limitations**](https://docs.hedera.com/solutions/ai/x402):
-
-> Settlement is per-request and discrete. x402 is **not built for streaming payments**
-> or multi-hop routing across ledgers.
->
-> [Hedera docs, x402](https://docs.hedera.com/solutions/ai/x402)
-
-[x402 issue #2273](https://github.com/x402-foundation/x402/issues/2273) proposes the fix,
-`metered-session`, prepaid sessions with auto refund, and has sat **open with zero
-comments** since May 2026. Its `unit` enum already contains `second`, and `metered
-compute` is named in its use cases.
-
-Pinout implements that proposal, and answers its open questions with measurements.
-
----
-
-## How the meter works
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client
-    participant S as Pinout server
-    participant F as x402 facilitator
-    participant H as Hedera
-
-    C->>S: POST /compute/gpu-b200
-    S-->>C: 402 + PAYMENT-REQUIRED<br/>(signed offer, price, feePayer)
-    C->>C: sign bare TransferTransaction
-    C->>S: retry + PAYMENT-SIGNATURE
-    S->>F: verify
-    F-->>S: valid
-    S-->>C: 200 · seconds + session secret
-    S->>F: settle (after handler succeeds)
-    F->>H: submit, facilitator pays ALL gas
-    Note over C,H: buyer's balance moves by exactly the price
-
-    loop every second held
-        S-->>C: SSE tick · 1 second burned
-    end
-    S->>H: burn checkpoint → plain HCS topic
-    Note over C,S: seconds low → top-up 402 cycle<br/>the machine never stops
-
-    C->>S: POST /close
-    S->>H: refund unused seconds
-    S->>H: HIP-991 settlement anchor<br/>(costs the seller ~0.73 ℏ)
-    S-->>C: signed receipt (JWS/ES256K)
-```
-
-**Credit is derived from the settled on chain transfer, never from a price table.**
-A session can only ever be credited with the amount that actually moved to the seller in
-the transaction the buyer signed. This is structural. Three separate money bugs in this
-codebase were the same shape, a flat priced 402 plus a credit read from a lane table plus
-an on chain refund of the difference, and deriving credit from the transfer makes that
-class impossible rather than fixing it three times.
-
-The refund is **not** gated behind the anchor. Gating it meant an anchor failure stranded
-a buyer's balance. The anchor is queued and swept instead, and the verifier reports
-`PENDING_ANCHOR` (exit 3) rather than accusing an honest seller during the window before
-it lands.
-
----
-
-## The two tier ledger
-
-The original design checkpointed everything to a HIP-991 fee charging topic. Measurement
-killed it:
-
-| Payload | Plain HCS topic | HIP-991 topic |
-|--------:|----------------:|--------------:|
-|   100 B |       $0.00017  |    **$0.0500** |
-| 1,000 B |       $0.00078  |    **$0.0500** |
-| 4,000 B |       $0.00080  |    **$0.0500** |
-
-A fee charging topic costs a **flat ~$0.050 per message, 62x a plain topic, independent
-of payload size *and* of the fee amount.** So the meter is split:
-
-```mermaid
-flowchart LR
-    subgraph T1["Tier 1 · burn ledger"]
-        A["plain HCS topic<br/>~$0.0008/write<br/>every N seconds"]
-    end
-    subgraph T2["Tier 2 · settlement anchor"]
-        B["HIP-991 topic<br/>~$0.050/write<br/>batched, rare"]
-    end
-    E[seconds held] --> A
-    A -->|"final seq + consensus running_hash"| B
-    B -->|"~0.73 ℏ network fee"| NET["Hedera network<br/>(irrecoverable)"]
-
-    style T1 stroke-dasharray: 4
-    style NET fill:#1a7f37,color:#fff
-```
-
-Tier 2 embeds tier 1's final `sequence_number` and consensus `running_hash`, so burn
-history cannot be restated without invalidating the anchor that committed to it.
-
-**Both tiers are HCS. There is no smart contract anywhere in this system.**
-
-Anchors are **batched by default**, one anchor covering many sessions. Per session
-anchoring costs ~0.73 HBAR against a session priced in thousandths of that, which turns
-abandonment into a drain. `?settlement=priority` buys a dedicated anchor, but only when
-the session's own revenue covers its cost. Otherwise it falls back to batched, because
-unconditional priority is a free way to make a stranger spend 0.73 HBAR per call.
-
----
-
-## Verification
-
-The verifier trusts **only** the free public mirror node and the buyer's own record of
-seconds received. No API key, nothing to trust.
-
-```bash
-npm run verify -- <sessionId>
-```
-
-```mermaid
-flowchart TD
-    V[verifier] --> M[(public mirror node)]
-    M --> C1{1 · checkpoints contiguous?}
-    C1 --> C2{2 · anchor binds ledger head?}
-    C2 --> C3{3 · settlement arithmetic?}
-    C3 --> C4{4 · burn count = seconds received?}
-    C4 --> C5{5 · commitments match?}
-    C5 --> P["exit 0 · PASSED"]
-    C4 -->|no| F["exit 1 · FAILED<br/>names the exact overcharge"]
-    C5 -->|no| F
-    C4 -.->|no client record| I["exit 2 · INCONCLUSIVE"]
-    C2 -.->|anchor not landed yet| W["exit 3 · PENDING_ANCHOR"]
-
-    style P fill:#1a7f37,color:#fff
-    style F fill:#b62324,color:#fff
-    style I fill:#9a6700,color:#fff
-    style W fill:#0969da,color:#fff
-```
-
-One implementation, shared by the CLI, the MCP tool and the Agent Kit plugin. The
-artifact whose entire job is to be trustworthy should not exist twice and disagree with
-itself.
-
-### Watch it catch a cheating seller
-
-```bash
-npm run e2e -- --cheat 400        # seller inflates the ledger
-npm run verify -- <sessionId>     # exits 1
-```
-
-```
-1. contiguity              PASS
-2. tier binding            PASS
-3. settlement arithmetic   PASS
-4. ledger vs received      FAIL  claims 3000, client received 2600
-                                 (+400 phantom = 80000 tinybar overcharge)
-5. checkpoint commitments  FAIL  11/11 do not match
-```
-
-### Trust boundary
-
-Pinout claims a **tamper evident, independently recomputable consumption ledger**. It does
-**not** claim trustless delivery proof.
-
-Under `--cheat`, checks 1 to 3 still pass. The ledger genuinely is immutable and
-internally consistent, which is what HCS guarantees and all it guarantees. Only comparing
-it against the buyer's own record exposes fabrication. A seller that fabricates events
-*and* whose client never notices is outside what this proves.
-
-`INCONCLUSIVE` exists for exactly that reason. Without a client record, the verifier
-refuses to say "passed".
-
 ---
 
 ## Guards
@@ -462,6 +502,8 @@ price for work you will not do:
 - **seller solvency**, refusing new sessions when the seller could not afford a settlement
   anchor for every open session, rather than risk stranding a prepaid balance
 - an orphan reaper across every fleet, because a forgotten accelerator bills in silence
+
+---
 
 ---
 
@@ -488,6 +530,8 @@ npm run compute-e2e             # rent a real machine, run code, get refunded
 npm run e2e                     # metered token stream, end to end
 npm run verify -- <sessionId>   # recompute the bill from the mirror node
 ```
+
+---
 
 ---
 
@@ -532,6 +576,8 @@ would otherwise be free compute.
 
 ---
 
+---
+
 ## Token streams, the other workload
 
 The same meter runs token billed sessions, which is where the design started. One payment
@@ -544,15 +590,6 @@ npm run e2e
 ```
 
 ---
-
-## Why Hedera
-
-| Property | What it buys |
-|---|---|
-| **Fee payer model** | The facilitator pays all network fees. The buyer needs **no fee headroom**, so it can hold exactly the purchase amount and transact. |
-| **HIP-991 topic fees** | A log that **costs money to write**, ~0.7345 HBAR per settlement anchor in irrecoverable network fees, so publishing your final numbers is expensive and over reporting is expensive. No EVM chain charges for a log write without deploying a contract. The topic's custom fee goes to a collector fixed at topic creation, **not** to the paying buyer. |
-| **HCS `running_hash`** | The audit chain is computed by consensus nodes, not by the party being audited. |
-| **Free mirror node** | Public, unauthenticated, no signup, so verification costs the buyer nothing. |
 
 ---
 
@@ -588,6 +625,8 @@ npm run e2e
 
 ---
 
+---
+
 ## Built on
 
 [`@x402/core`](https://www.npmjs.com/package/@x402/core) ·
@@ -600,6 +639,8 @@ npm run e2e
 Implements the x402 [`metered-session`](https://github.com/x402-foundation/x402/issues/2273),
 [`offer-and-receipt`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/extension-offer-and-receipt.md)
 (JWS/ES256K profile) and [`bazaar`](https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md) extensions.
+
+---
 
 ---
 
@@ -627,6 +668,8 @@ Stated plainly:
 - Sessions are single node and held in memory, persisted to an append only log. A crash
   loses at most `CHECKPOINT_EVERY` units, and **the loss falls on the seller**.
 - Facilitator equivalence rests on one trial each, not a load test.
+
+---
 
 ## License
 

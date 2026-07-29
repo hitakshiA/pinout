@@ -31,7 +31,7 @@
     "check-config": "node -e \"import('./src/config.mjs').then(m=>{m.requireConfig();console.log('config OK')})\""
   },
   "version": "0.1.0",
-  "description": "Rent real machines by the second, paid over x402 on Hedera, refunded for every second you don't use.",
+  "description": "Metered payments and settlement for agents, on x402 and Hedera. One payment opens a pool of credits, a meter burns them, the agent tops up mid-session, and unused credits are refunded on-chain.",
   "license": "MIT",
   "author": "Hitakshi Arora (@hitakshiA)",
   "repository": {
