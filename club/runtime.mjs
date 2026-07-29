@@ -326,8 +326,10 @@ function buildTools(run) {
         funded: true,
         accountId: info.accountId,
         balanceTinybar: balance,
+        balanceHbar: Number((balance / 1e8).toFixed(8)),
         note:
-          `Your wallet holds ${balance} tinybar. Spend it as the job needs, ` +
+          `Your wallet holds ${(balance / 1e8).toFixed(4)} HBAR (${balance} tinybar). ` +
+          `Spend it as the job needs, ` +
           `including topping up sessions, without asking again. Call ` +
           `wallet_balance to check how much room is left.`,
       };

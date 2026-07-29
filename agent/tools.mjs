@@ -14,6 +14,20 @@ import { look, isVisual } from "./vision.mjs";
  * service as broken. Results are almost always printed at the END, so keep the
  * head and the tail and say plainly what was dropped.
  */
+/**
+ * Report money in both units.
+ *
+ * An agent told only "18,960,000 tinybar" wrote "18.96 HBAR" in its receipt to
+ * the user. It had divided by a million instead of a hundred million. Its own
+ * arithmetic on the tinybar was correct throughout; the only wrong number was
+ * the one a person would actually read. Doing the conversion here removes the
+ * chance to get it wrong.
+ */
+function money(tinybar) {
+  const t = Number(tinybar ?? 0);
+  return { tinybar: t, hbar: Number((t / 1e8).toFixed(8)) };
+}
+
 function clipOutput(text, limit = 6000) {
   if (text.length <= limit) return { stdout: text };
   const head = Math.floor(limit * 0.25), tail = limit - head;
@@ -157,10 +171,13 @@ export function pinoutTools({
       const r = await pinout().close(a.sessionId, a.cause);
       onSessionClose?.(a.sessionId);
       return {
+        consumed: money(r.consumedAmount),
+        refund: money(r.refundAmount),
         consumedTinybar: r.consumedAmount, refundTinybar: r.refundAmount,
         settlementTx: r.settlementTx, refundTx: r.refundTxUrl,
         anchorFeeTinybar: r.settlementFeeTinybar,
         burnCheckpoints: r.burnCheckpoints,
+        note: "quote the hbar figures to the human; do not convert tinybar yourself",
       };
     },
   });
@@ -194,9 +211,11 @@ export function pinoutTools({
         };
       }
       return {
-        spentTinybar: client.spent, budgetTinybar: client.budget,
-        remainingTinybar: client.budget - client.spent, account: client.accountId,
-        funded: true,
+        spent: money(client.spent),
+        budget: money(client.budget),
+        remaining: money(client.budget - client.spent),
+        account: client.accountId, funded: true,
+        note: "quote the hbar figures to the human; do not convert tinybar yourself",
       };
     },
   });
