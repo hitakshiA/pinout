@@ -12,7 +12,7 @@ import { streamSSE } from "hono/streaming";
 import { env } from "../src/config.mjs";
 import * as ws from "./workspace.mjs";
 import * as rt from "./runtime.mjs";
-import { CUSTODY_DISCLOSURE, balanceOf } from "./wallet.mjs";
+import { CUSTODY_DISCLOSURE, balanceOf, withdraw } from "./wallet.mjs";
 
 const app = new Hono();
 app.use("*", cors({ origin: "*", allowHeaders: ["Content-Type", "Authorization"] }));
@@ -38,6 +38,7 @@ app.get("/", (c) => c.json({
     read: "GET /workspace/:id",
     run: "POST /workspace/:id/run",
     decide: "POST /workspace/:id/decide  (approve | deny | revise)",
+    withdraw: "POST /workspace/:id/withdraw  (any time, even mid job)",
     fund: "POST /workspace/:id/fund",
     events: "GET /workspace/:id/events  (SSE)",
     close: "POST /workspace/:id/close",
@@ -182,6 +183,32 @@ app.post("/workspace/:id/close", async (c) => {
   try {
     const swept = await rt.closeWorkspace(a.w.id);
     return c.json({ closed: true, swept });
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+/**
+ * Pull HBAR back out of the agent's wallet, at any time, including mid job.
+ *
+ * This is what makes funding the wallet a reasonable thing to ask for. The
+ * human is not handing over money until the agent is finished with it; they
+ * are lending it and can call it back. An agent that finds itself short simply
+ * asks again, which it already knows how to do.
+ */
+app.post("/workspace/:id/withdraw", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const w = ws.get(a.w.id);
+  if (!w?.wallet) return c.json({ error: "this workspace has no wallet" }, 409);
+  const body = await c.req.json().catch(() => ({}));
+  const tinybar = body?.tinybar ? Number(body.tinybar) : null;
+  if (tinybar != null && !(tinybar > 0)) {
+    return c.json({ error: "tinybar must be positive, or omit it to withdraw everything" }, 400);
+  }
+  try {
+    const out = await withdraw({ ...w.wallet, tinybar });
+    rt.runOf(a.w.id)?.say("withdrawn", out);
+    return c.json(out);
   } catch (e) {
     return c.json({ error: e.message }, 500);
   }

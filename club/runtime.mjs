@@ -59,54 +59,85 @@ export const RUN_STATE = {
 
 const SYSTEM = `You rent real compute and pay for it yourself over x402 on Hedera.
 
-You have no money until a human gives you some. Nothing you can buy will work
-before that, and trying will fail with a clear error.
+You have your own wallet. A human puts HBAR into it and can take HBAR out of it
+at any time, including while you are working. Everything left over comes back to
+them when the job ends, so money in your wallet is never money they have lost.
+
+You do not ask permission for each purchase. You ask for HBAR when you need it,
+and then you spend it as the work requires.
 
 How to work:
 
 1. Look before you ask. Call discover and list_inputs first, and peek_input on
-   anything text that tells you what the job is. Read the lane catalogue and the
-   real sizes of the inputs. A plan built on a guess about the data is a plan
-   the human cannot judge.
+   anything text that says what the job is. Read the lane catalogue and the real
+   sizes of the inputs. A plan built on a guess about the data is a plan the
+   human cannot judge.
 
-2. Work out what the job needs, then ask for it once. Call request_funding with
-   a real plan: which lane, how many seconds, what that costs, and why that lane
-   rather than a cheaper one. A human reads this and decides. Ask for what the
-   job needs plus a sensible margin, not for the whole ceiling.
+2. Ask for HBAR once, for the whole job. Call request_hbar with what you intend
+   to do, which lane, and roughly what you expect it to cost. Ask for enough to
+   finish comfortably, because unused HBAR is refunded and being short is what
+   actually costs the human their work. Do not ask for the ceiling just because
+   it is there.
 
-3. If they say no, or say change it, you get told why. Re-plan properly. Do not
-   ask again for the same thing with the same reasoning.
+3. Spend it without asking again. Rent the machine, buy more seconds whenever
+   the meter runs low, and keep going. Topping up a session is not a decision
+   the human needs to make; it is just your wallet paying for the seconds you
+   already committed to using.
 
-4. Once funded, rent the machine and do the work. Move inputs onto it with
-   stage_input, never by reading them into your own context. Then, BEFORE you
-   release the machine, hand back everything the human asked for with
-   deliver_file. Releasing destroys the filesystem, and a result you did not
-   deliver is a result they paid for and did not get.
+4. Watch your wallet, not your session. Call wallet_balance when you want to
+   know how much room you have left. If it is getting thin relative to the work
+   remaining, call request_hbar again EARLY and say what you have produced so
+   far. Do not wait until a session is starving: a human takes time to respond,
+   and a machine whose credits run out is only held briefly before it is
+   destroyed with your files on it.
 
-   Release when you are done. The meter runs until you do, and thinking time is
-   billed at the same rate as computing.
+5. Move inputs with stage_input, never by reading them into your context. Hand
+   results back with deliver_file BEFORE you release the machine, because
+   releasing destroys the filesystem.
 
-5. Ask for more money BEFORE you run out, not after.
+6. If you do get stuck without funds, say so plainly and stop. Say what you
+   produced, what it cost, what still needs doing, and how much more you need.
+   Do not thrash: renting a second machine to retry the same step wastes the
+   money they gave you.
 
-   Every exec tells you secondsHeldSoFar, and you know how many seconds you
-   bought. When you are down to roughly a quarter of them, stop and call
-   request_funding, saying what you have produced so far.
-
-   This matters more than it sounds. When credits hit zero the machine is held
-   rather than destroyed, but only for a short grace period, and a human has to
-   read your request and approve it inside that window. If they are slow, or
-   you spend the window deciding what to ask for, the machine is torn down with
-   your files on it and you will have to buy another one and start again. A job
-   has already been lost exactly this way.
-
-   So treat running to zero as a failure, not a checkpoint. If you do run out
-   anyway, ask immediately and briefly.
-
-6. At the end, tell the human three things: what you produced and where it is,
-   what it cost, and what came back as refund. Get the numbers from
-   close_session and spend_report rather than estimating them, and say so if
-   they disagree with what you expected. Never claim you did something you did
+7. At the end, tell them what you produced and where it is, what it cost, and
+   what came back as refund. Get the numbers from close_session and
+   spend_report rather than estimating. Never claim you did something you did
    not do.`;
+
+/**
+ * Say what kind of failure this was.
+ *
+ * Running out of money is not a crash and should not be presented as one. A
+ * user who reads "error: no credits" concludes the service is broken; a user
+ * who reads "paused, needs more HBAR to continue" tops up. The difference is
+ * entirely in the framing, and the work sitting on the machine is the same
+ * either way.
+ */
+function classify(e) {
+  const m = String(e?.message ?? "");
+  if (e?.outOfCredits || /no credits|out of credits|could not top up/i.test(m)) {
+    return {
+      kind: "paused_needs_funding",
+      recoverable: true,
+      humanMessage: "The agent ran out of HBAR partway through. Add more to its " +
+                    "wallet and it can carry on from where it stopped.",
+    };
+  }
+  if (/cancelled while waiting for funding/i.test(m)) {
+    return { kind: "cancelled", recoverable: true,
+             humanMessage: "Stopped while waiting for funding." };
+  }
+  if (/at capacity/i.test(m)) {
+    return { kind: "capacity", recoverable: true,
+             humanMessage: "No machine of that type was free. Nothing was charged for it." };
+  }
+  if (/insufficient|INSUFFICIENT_(PAYER|ACCOUNT)_BALANCE/i.test(m)) {
+    return { kind: "wallet_empty", recoverable: true,
+             humanMessage: "The agent's wallet is empty. Add HBAR to continue." };
+  }
+  return { kind: "error", recoverable: false };
+}
 
 /** One live run per workspace. */
 const runs = new Map();
@@ -203,19 +234,22 @@ export class Run extends EventEmitter {
 
 /** Tools the agent gets. Paid ones refuse until the workspace has a wallet. */
 function buildTools(run) {
-  const request_funding = tool({
-    name: "request_funding",
+  const request_hbar = tool({
+    name: "request_hbar",
     description:
-      "Ask the human to fund this workspace so you can buy compute. Use this " +
-      "before your first purchase, and again if you run out mid job. A human " +
-      "reads your plan and approves, denies, or tells you to change it. " +
-      "Explain your reasoning: they are deciding whether to spend real money.",
+      "Ask the human to put HBAR into your wallet. This is NOT approval for a " +
+      "single purchase: once the HBAR is there you spend it as the work needs, " +
+      "including buying more seconds mid job, without asking again. Anything " +
+      "you do not spend is refunded to them, and they can withdraw at any time. " +
+      "Ask once for the whole job, and ask again EARLY if you are running low.",
     inputSchema: z.object({
-      plan: z.string().describe("What you will do with the machine, in plain language"),
-      lane: z.string().describe("The lane you intend to rent, e.g. gpu-l4"),
-      estimatedSeconds: z.number().describe("How long you expect to hold it"),
-      requestTinybar: z.number().describe("How much you are asking for, in tinybar"),
+      plan: z.string().describe("What you will do with the money, in plain language"),
+      lane: z.string().describe("The lane you intend to rent, e.g. gpu-t4"),
+      estimatedSeconds: z.number().describe("Roughly how long you expect to hold it"),
+      requestTinybar: z.number().describe("How much HBAR you are asking for, in tinybar"),
       reasoning: z.string().describe("Why this lane and this amount, and not something cheaper"),
+      progressSoFar: z.string().optional()
+        .describe("If this is a follow-up, what you have already produced"),
     }),
     outputSchema: z.object({
       funded: z.boolean(),
@@ -223,7 +257,9 @@ function buildTools(run) {
       balanceTinybar: z.number(),
       note: z.string(),
     }),
-    // The whole point: never runs without a human saying yes.
+    // The human approves money entering the wallet. They do not approve each
+    // purchase: an agent that has to stop and ask before every top-up loses
+    // the machine it is standing on while it waits for an answer.
     requireApproval: true,
     execute: async (input) => {
       const info = await run.awaitFunding(input.requestTinybar, input.plan);
@@ -234,8 +270,37 @@ function buildTools(run) {
         accountId: info.accountId,
         balanceTinybar: balance,
         note:
-          `Funded with ${info.tinybar} tinybar. This wallet is yours for this ` +
-          `workspace. Spend it on the job and release what you rent.`,
+          `Your wallet holds ${balance} tinybar. Spend it as the job needs, ` +
+          `including topping up sessions, without asking again. Call ` +
+          `wallet_balance to check how much room is left.`,
+      };
+    },
+  });
+
+  const wallet_balance = tool({
+    name: "wallet_balance",
+    description:
+      "How much HBAR is in your wallet right now, read from the network. Free. " +
+      "Use it to decide whether you can afford to keep going, and call " +
+      "request_hbar EARLY if the answer is thin.",
+    inputSchema: z.object({}),
+    execute: async () => {
+      const w = ws.get(run.workspaceId)?.wallet;
+      if (!w) return { funded: false, tinybar: 0, note: "no wallet yet, call request_hbar" };
+      const tinybar = await balanceOf(w.accountId).catch(() => null);
+      if (tinybar == null) return { error: "could not read the balance from the network" };
+      // A bare number invites the agent to guess whether it is a lot. Say what
+      // it buys on the lane it is actually renting.
+      const rate = run.currentLaneRate ?? null;
+      return {
+        accountId: w.accountId,
+        tinybar,
+        hbar: Number((tinybar / 1e8).toFixed(4)),
+        ...(rate ? {
+          secondsAffordable: Math.floor(tinybar / rate),
+          onLane: run.currentLane,
+        } : {}),
+        low: rate ? tinybar < rate * 60 : tinybar < 20_000_000,
       };
     },
   });
@@ -297,13 +362,19 @@ function buildTools(run) {
         return art;
       },
     },
-    onSessionOpen: (id) => run.openSessions.add(id),
+    onSessionOpen: (id, lane) => {
+      run.openSessions.add(id);
+      if (lane) {
+        run.currentLane = lane;
+        lanes().then((c) => { run.currentLaneRate = c.get(lane)?.tinybarPerSecond ?? null; });
+      }
+    },
     onSessionClose: (id) => run.openSessions.delete(id),
     maxPerCallTinybar: Math.min(run.ceilingTinybar, 2_000_000_000),
     budgetTinybar: run.ceilingTinybar,
   });
 
-  return [request_funding, list_inputs, peek_input, ...paid];
+  return [request_hbar, wallet_balance, list_inputs, peek_input, ...paid];
 }
 
 /**
@@ -371,7 +442,7 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
 
   const needsApproval = await Promise.resolve(result.requiresApproval?.()).catch(() => false);
   const pending = (await Promise.resolve(result.getPendingToolCalls?.()).catch(() => null)) ?? [];
-  const waiting = pending.find((p) => p.name === "request_funding")
+  const waiting = pending.find((p) => p.name === "request_hbar")
     ?? (needsApproval ? pending[0] : null);
 
   if (waiting) {
@@ -465,8 +536,8 @@ export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinyba
       const out = await drive(run, { input: [{ role: "user", content: task }] });
       if (!out.parked) await finish(run);
     } catch (e) {
-      run.say("error", { message: e.message });
-      run.setState(RUN_STATE.FAILED, { message: e.message });
+      run.say("error", { message: e.message, ...classify(e) });
+      run.setState(RUN_STATE.FAILED, { message: e.message, ...classify(e) });
       runs.delete(workspaceId);
     }
   })();

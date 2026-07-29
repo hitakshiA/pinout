@@ -104,7 +104,7 @@ export function pinoutTools({
         ? await pinout().openComputeSession(a.lane)
         : await pinout().openSession();
       received.set(s.sessionId, []);
-      onSessionOpen?.(s.sessionId);
+      onSessionOpen?.(s.sessionId, a.lane);
       return {
         sessionId: s.sessionId, lane: s.lane ?? "token", unit: s.unit,
         credits: s.credits ?? s.secondsPurchased,
@@ -256,7 +256,7 @@ function machineOr404(sessionId) {
       const lane = a.lane ?? "cpu-1";
       const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
       rented.set(m.sessionId, m);
-      onSessionOpen?.(m.sessionId);
+      onSessionOpen?.(m.sessionId, lane);
       return {
         sessionId: m.sessionId, lane, secondsPurchased: m.secondsPurchased,
         youCanNow: ["exec", "upload_file", "download_file", "list_files"],

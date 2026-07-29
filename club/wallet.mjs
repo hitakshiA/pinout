@@ -142,6 +142,42 @@ export async function sendToWorkspace({ accountId, tinybar, from }) {
   }
 }
 
+/**
+ * Take HBAR back out of the agent's wallet mid-job.
+ *
+ * The point of this is that money in the agent's wallet is never money the
+ * human has given up control of. They can pull it back while the agent is
+ * still working; the agent simply finds itself short and asks for more, which
+ * it already knows how to do. Only ever pays out to the bound funder.
+ */
+export async function withdraw({ accountId, privateKey, boundFunder, tinybar, leaveTinybar = 100_000 }) {
+  if (!boundFunder) throw new Error("refusing to pay out an account with no bound funder");
+  const client = operator();
+  const key = PrivateKey.fromStringDer(privateKey);
+  try {
+    const bal = (await new AccountBalanceQuery().setAccountId(accountId).execute(client))
+      .hbars.toTinybars().toNumber();
+    // leave enough behind to pay a fee, or the account is stranded and the
+    // agent cannot even sign the transaction that would close it
+    const available = Math.max(0, bal - leaveTinybar);
+    const amount = tinybar ? Math.min(tinybar, available) : available;
+    if (amount <= 0) return { withdrawn: 0, balanceTinybar: bal, note: "nothing available to withdraw" };
+
+    const tx = await new TransferTransaction()
+      .addHbarTransfer(AccountId.fromString(accountId), Hbar.fromTinybars(-amount))
+      .addHbarTransfer(AccountId.fromString(boundFunder), Hbar.fromTinybars(amount))
+      .setTransactionMemo("pinout.club withdrawal")
+      .freezeWith(client).sign(key);
+    const resp = await tx.execute(client);
+    const st = (await resp.getReceipt(client)).status.toString();
+    if (st !== "SUCCESS") throw new Error(`withdrawal failed: ${st}`);
+    return {
+      withdrawn: amount, to: boundFunder, txId: resp.transactionId.toString(),
+      balanceTinybar: bal - amount,
+    };
+  } finally { client.close(); }
+}
+
 export async function balanceOf(accountId) {
   const client = operator();
   try {

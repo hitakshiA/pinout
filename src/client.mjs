@@ -20,6 +20,9 @@ import { env, NETWORK } from "./config.mjs";
 export class BudgetExceededError extends Error {}
 export class UntrustedPaymentError extends Error {}
 
+/** Runaway backstop only; the wallet and the budget guards are the real limit. */
+const MAX_AUTO_TOPUPS = Number(process.env.MAX_AUTO_TOPUPS ?? 60);
+
 export class PinoutClient {
   constructor({ base, accountId, privateKey, maxPerCallTinybar = 5_000_000, budgetTinybar = 50_000_000 }) {
     this.base = base.replace(/\/$/, "");
@@ -182,9 +185,16 @@ export class PinoutClient {
       onEvent: () => { ticks++; onTick?.(ticks); },
       onPaused: async () => {
         paused = true;
-        if (!autoTopUp || topUps >= 5) {
+        // The cap used to be 5. That was right when every top-up was a
+        // separate decision someone had to approve, and wrong once the agent
+        // buys seconds straight from a wallet a human already funded: a long
+        // job would stall at the fifth refill with money sitting unspent.
+        // The real bounds are the wallet balance and the per-call and total
+        // budget guards in this client, all of which fail loudly. This is only
+        // a runaway backstop.
+        if (!autoTopUp || topUps >= MAX_AUTO_TOPUPS) {
           starved = autoTopUp
-            ? `topped up ${topUps} times already and stopped`
+            ? `hit the ${MAX_AUTO_TOPUPS} auto top-up backstop on one session`
             : "auto top-up is off";
           return;
         }

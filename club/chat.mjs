@@ -82,7 +82,15 @@ function render(ev) {
       console.log(C.dim(`    -> ${ev.result.slice(0, 160)}`));
       break;
     case "error":
-      console.log(C.bad(`  error: ${ev.message}`));
+      if (ev.recoverable) {
+        console.log(C.money(`\n  PAUSED  ${ev.humanMessage}`));
+        console.log(C.dim(`          (${ev.message})`));
+      } else {
+        console.log(C.bad(`  error: ${ev.message}`));
+      }
+      break;
+    case "withdrawn":
+      console.log(C.money(`  withdrew ${hbar(ev.withdrawn)} back to ${ev.to}`));
       break;
     case "state":
       console.log(C.dim(`  [${ev.state}]`));
