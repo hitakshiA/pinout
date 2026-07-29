@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { env } from "../src/config.mjs";
+import { sendToWorkspace } from "./wallet.mjs";
 
 const BASE = process.env.CLUB_URL ?? "http://localhost:4022";
 const OUT = process.env.DEMO_OUT ?? "/tmp/pinout-demo";
@@ -165,15 +166,37 @@ async function main() {
         break;
       }
       case "funding_needed": {
-        // stand in for the browser wallet signing a transfer
+        // Stand in for the browser wallet signing a transfer.
+        //
+        // Opening the account moves money as a side effect of creating it, so
+        // the first funding works with nothing but a POST. A top-up has no
+        // such side effect: the account exists, and somebody has to actually
+        // send HBAR before /fund can confirm anything. Treating the resulting
+        // {pending:true} as success printed "funded 0.5000" for a transfer
+        // that had never happened, and the run then waited forever.
         const need = ev.needTinybar;
-        const res = await jsonOr(await api(`/workspace/${wsId}/fund`, {
-          method: "POST", cap, body: { funderAccountId: funder, tinybar: need },
-        }), "fund").catch((e) => ({ error: e.message }));
-        if (res.error) { console.log(C.bad(`  funding failed: ${res.error}`)); break; }
-        if (res.opened) firstFundingDone = true; else topUps++;
-        fundedTotal += res.tinybar ?? need;
-        console.log(C.ok(`  funded ${hbar(res.tinybar ?? need)} -> ${res.accountId}`));
+        try {
+          const wsNow = await jsonOr(await api(`/workspace/${wsId}`, { cap }), "read workspace");
+          if (wsNow.walletAccount) {
+            const sent = await sendToWorkspace({
+              accountId: wsNow.walletAccount, tinybar: need, from: funder,
+            });
+            console.log(C.dim(`  sent ${hbar(sent.tinybar)}  ${sent.txId}`));
+          }
+          // the mirror node lags the transaction it is being asked about
+          let res = null;
+          for (let i = 0; i < 15; i++) {
+            res = await jsonOr(await api(`/workspace/${wsId}/fund`, {
+              method: "POST", cap, body: { funderAccountId: funder, tinybar: need },
+            }), "fund");
+            if (!res.pending) break;
+            await new Promise((r) => setTimeout(r, 2500));
+          }
+          if (res?.pending) { console.log(C.bad("  transfer never confirmed")); break; }
+          if (res.opened) firstFundingDone = true; else topUps++;
+          fundedTotal += res.tinybar ?? need;
+          console.log(C.ok(`  funded ${hbar(res.tinybar ?? need)} -> ${res.accountId}`));
+        } catch (e) { console.log(C.bad(`  funding failed: ${e.message}`)); }
         break;
       }
       case "artifact":
