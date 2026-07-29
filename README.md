@@ -16,6 +16,15 @@ inference by the token, so nobody knows the total until the work has run.
 agent tops up without losing state, and the remainder is refunded on-chain. You set the
 ceiling; the agent decides what to buy inside it.
 
+**It is built on Hedera specifically, and it would not work anywhere else.** Usage is
+checkpointed to a [Consensus Service](https://docs.hedera.com/hedera/core-concepts/consensus-service)
+topic whose `running_hash` the network maintains, so a seller cannot restate a bill it
+already published. Settlement is anchored to a [HIP-991](https://hips.hedera.com/hip/hip-991)
+topic that costs the seller real, unrecoverable HBAR to write to, which makes
+over-reporting expensive by construction. The agent pays **zero network fees**, so it holds
+exactly what it means to spend. Anyone can recompute the whole bill from the free public
+mirror node. There is **no smart contract in this system**.
+
 **[Pinout Compute](#pinout-compute)** is the first service on it. Agents rent CPU and NVIDIA
 GPU machines by the second, from a T4 up to a B300.
 
