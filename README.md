@@ -173,7 +173,7 @@ upgrade, or audit for reentrancy.
 ## The two tier ledger
 
 The original design checkpointed everything to a HIP-991 fee charging topic. The
-[measured cost of a fee-charging write](#3-a-log-that-costs-money-to-write) killed that:
+[measured cost of a fee-charging write](#writing-the-receipt-costs-us-money) killed that:
 flat ~$0.050 per message whatever its size, about 62x a plain topic. So the meter splits
 in two, cheap during the session and expensive once at the end:
 
