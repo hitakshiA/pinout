@@ -275,7 +275,28 @@ function machineOr404(sessionId) {
     }),
     execute: async (a) => {
       const m = machineOr404(a.sessionId);
-      const r = await m.exec(a.code);
+      let r;
+      try {
+        r = await m.exec(a.code);
+      } catch (e) {
+        // Running out of money mid-job is a normal event, not a crash. Say so
+        // in terms the agent can act on, and be explicit that the work is not
+        // lost, or it will assume the machine is gone and start over on a
+        // fresh one it also has to pay for.
+        if (e.outOfCredits) {
+          return {
+            outOfCredits: true,
+            sessionId: a.sessionId,
+            error: e.message,
+            whatToDo:
+              "Your machine is still held and your files are intact. Call " +
+              "request_funding with what you still need and why, saying what " +
+              "you have already produced. When the human funds it, call top_up " +
+              "on this same sessionId and carry on. Do NOT rent a second machine.",
+          };
+        }
+        throw e;
+      }
       return {
         exitCode: r.exitCode, ms: r.ms,
         ...clipOutput(r.stdout ?? ""),

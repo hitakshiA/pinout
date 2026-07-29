@@ -174,15 +174,31 @@ export class PinoutClient {
     const s = await this.openComputeSession(lane);
     const id = s.sessionId;
     let ticks = 0, paused = false, topUps = 0;
+    // Why a top-up last failed, if it did. Without this the failure is
+    // invisible and the next exec blocks for its full timeout.
+    let starved = null;
     const streamDone = this.stream(id, {
       n: maxSeconds, provider: "compute", hold: true,
       onEvent: () => { ticks++; onTick?.(ticks); },
       onPaused: async () => {
         paused = true;
-        if (!autoTopUp || topUps >= 5) return;
-        try { await this.topUp(id); topUps++; } catch { /* surfaced on next call */ }
+        if (!autoTopUp || topUps >= 5) {
+          starved = autoTopUp
+            ? `topped up ${topUps} times already and stopped`
+            : "auto top-up is off";
+          return;
+        }
+        try { await this.topUp(id); topUps++; starved = null; }
+        catch (e) {
+          // This used to be an empty catch commented "surfaced on next call".
+          // It was not surfaced on the next call. The meter had stopped, the
+          // machine was paused, and exec sat blocked against it for its full
+          // 630s timeout with no indication that the session had simply run
+          // out of money. Ten minutes of silence for an out-of-funds error.
+          starved = e.message;
+        }
       },
-      onResumed: () => { paused = false; },
+      onResumed: () => { paused = false; starved = null; },
     }).catch((e) => ({ error: e }));
 
     // The machine is not usable until it has actually been provisioned; the
@@ -195,6 +211,17 @@ export class PinoutClient {
     }
 
     const call = async (path, init, timeoutMs = 630_000) => {
+      // Fail fast rather than blocking against a machine whose meter stopped.
+      // A paused session delivers nothing; waiting on it only converts an
+      // out-of-credit error into a timeout ten minutes later.
+      if (paused && starved) {
+        const e = new Error(
+          `session ${id.slice(0, 8)} is out of credits and could not top up: ${starved}. ` +
+          `The machine is HELD, not destroyed, and your files are intact. ` +
+          `Get more funds into this wallet and call topUp(), or release() to stop and be refunded.`);
+        e.outOfCredits = true; e.stillRented = true;
+        throw e;
+      }
       // Explicit timeout: undici's default surfaces a hung exec as a bare
       // "fetch failed" with no indication that the machine is still rented and
       // still billing.
