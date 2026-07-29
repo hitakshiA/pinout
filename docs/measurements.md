@@ -337,3 +337,67 @@ write a HIP-991 anchor at ~0.73 HBAR. That is a griefing and fund-drain vector.
 FIXED: a 32-byte per-session secret is issued once at mint, stored only as a
 SHA-256 hash and compared in constant time (`src/session.mjs`). `close`,
 `stream`, `topup` and `status` all require it; unauthenticated calls return 401.
+
+## Real workloads, not print loops (2026-07-29)
+
+Everything below was run against the deployed service with a third-party wallet
+paying real testnet HBAR. Earlier testing had only ever used trivial jobs, which
+is why several of these faults survived five audits.
+
+### Daytona `cpu-4` — 4M rows, files on disk
+
+| | |
+|---|---|
+| pip install pandas + pyarrow | 7.5 s |
+| generate + write 4,000,000-row parquet | 24.9 MB, 4.3 s |
+| read back from disk (round trip verified) | 3.0 s, 160 MB resident |
+| 6 groupby passes → 8,215 groups | 12 s |
+| wall clock / billed | 33.7 s / 30 s |
+| money | 4,410,000 consumed + 13,230,000 refunded = 17,640,000 paid, exact |
+
+Sandbox reality: Python 3.11.15, 3.2 GB disk, working pip, 7 ms to pypi.
+`os.cpu_count()` reports **64** — the host's cores, not the lane's quota, so a
+job that sizes a thread pool from it will oversubscribe.
+
+Egress is filtered. Reachable: pypi, huggingface.co. Blocked: CloudFront
+(connection reset). A job that downloads its input cannot assume the open
+internet.
+
+### Modal `gpu-t4` — real training
+
+Tesla T4, 15.6 GB, 40 SMs, cc7.5, torch 2.4.1+cu121.
+
+| | |
+|---|---|
+| fp32 matmul 4096² | 4.15 TFLOP/s |
+| CNN, 379,010 params, 10 epochs | loss 0.7310 → 0.2175 |
+| peak GPU memory | 0.51 GB |
+| checkpoint written, reloaded, outputs identical | 1.52 MB |
+| cold start, first pull of the 3 GB image | **101,176 ms** |
+| cold start, image cached | **187 ms** |
+
+The buyer's meter starts after provisioning, so the seller absorbs the cold
+start. The first pull costs ~$0.026 of unbilled T4 time; every session after it
+runs at the intended margin. Sellers should pre-warm an image before opening a
+GPU lane to the public.
+
+### Modal `gpu-a100-80`
+
+NVIDIA A100 80 GB: 32.3 TFLOP/s at 4096², **123.8 TFLOP/s** at 8192² (tf32).
+
+This lane was called `gpu-a100-40`. Modal returns an 80 GB A100 for both `A100`
+and `A100-40GB` on this account, so the lane advertised and priced a card it
+could not deliver. Renamed to what actually provisions, and its cost basis is
+now marked **unverified** — Modal's billing API is Team-tier only, so the figure
+is arithmetic on published rates, not a measurement.
+
+### Getting results out
+
+There is no file upload or download API. Code goes in as base64 (64 KB cap) and
+everything comes back through stdout. That channel was corrupting data: adapters
+split each raw chunk on newlines independently, so any line straddling a chunk
+boundary silently became two. A 1247-byte file returned base64'd arrived as a
+412-byte fragment that still decoded to valid-looking CSV.
+
+After the fix, a 180,000-byte random binary on a single ~240 KB line arrives
+byte-for-byte with a matching sha256, on both providers.

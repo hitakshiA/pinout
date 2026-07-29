@@ -24,4 +24,4 @@ export class ComputeAdapter {
 }
 
 /** Lanes a client may request. Kept separate from pricing (see rates.json). */
-export const LANES = ["cpu-small", "gpu-t4", "gpu-a100-40"];
+export const LANES = ["cpu-small", "cpu-4", "gpu-t4", "gpu-a100-80"];

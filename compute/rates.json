@@ -43,17 +43,18 @@
       "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
       "_imageNote": "torch+CUDA preinstalled; a bare python image made this lane unusable for ML"
     },
-    "gpu-a100-40": {
+    "gpu-a100-80": {
       "provider": "modal",
-      "gpu": "A100-40GB",
+      "gpu": "A100-80GB",
       "vcpu": 4,
       "memGiB": 16,
-      "providerCostPerSecUsd": 0.00076856,
-      "creditTinybar": 1229000,
+      "providerCostPerSecUsd": 0.00095884,
+      "creditTinybar": 1533000,
       "marginPct": 10,
-      "_costVerified": true,
       "image": "pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime",
-      "_imageNote": "torch+CUDA preinstalled; a bare python image made this lane unusable for ML"
+      "_costVerified": false,
+      "_costBasis": "Modal published A100-80GB $2.50/hr + verified sandbox CPU/RAM rates; Modal's billing API is Team-tier only so this is derived, not measured",
+      "_hardwareNote": "was 'gpu-a100-40'. Modal returns an 80GB A100 for both 'A100' and 'A100-40GB' on this account, so the 40GB lane advertised and priced a card it could not deliver. Renamed to what actually provisions."
     }
   },
   "_laneSplit": "Daytona = CPU only (no GPU on this plan). Modal = GPU only.",

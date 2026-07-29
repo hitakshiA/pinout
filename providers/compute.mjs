@@ -30,7 +30,7 @@ export const compute = {
 
   /**
    * @param n     max seconds to hold the machine (the credit budget caps it too)
-   * @param lane  cpu-small | cpu-4 | gpu-t4 | gpu-a100-40 | local
+   * @param lane  cpu-small | cpu-4 | gpu-t4 | gpu-a100-80 | local
    * @param code  arbitrary source the agent wants executed
    */
   async *stream({ n = 120, lane = "local", code, sessionId, onBalance } = {}) {
@@ -51,7 +51,12 @@ export const compute = {
         // billed to the buyer, and usually longer than the cap allows.
         image: spec.image,
         vcpu: spec.vcpu, memGiB: spec.memGiB, memMiB: (spec.memGiB ?? 8) * 1024,
-        gpu: spec.gpu ? String(spec.gpu).replace(/-.*$/, "") : undefined,
+        // Pass the GPU spec THROUGH. Stripping at the first dash turned the
+        // lane's "A100-40GB" into a bare "A100", which Modal resolves to the
+        // 80GB part — so the gpu-a100-40 lane could never provision the card it
+        // is named and priced for, and a buyer got different hardware than the
+        // lane it paid for. Modal accepts the qualified names directly.
+        gpu: spec.gpu ? String(spec.gpu) : undefined,
         timeoutSeconds: n + 60,
       });
       handle = p.handle;

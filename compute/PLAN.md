@@ -110,7 +110,7 @@ Lane split is fixed: **Daytona = CPU only** (no GPU on this plan), **Modal = GPU
 | `cpu-small` 1 vCPU / 1 GiB | Daytona | $0.0000185/s | 30,000 tinybar | **3,003 h** |
 | `cpu-4` 4 vCPU / 8 GiB | Daytona | $0.000092/s | 147,000 tinybar | 604 h |
 | `gpu-t4` 2 vCPU / 8 GiB | Modal | $0.000257/s | 411,000 tinybar | **32.5 h** |
-| `gpu-a100-40` 4 vCPU / 16 GiB | Modal | $0.000769/s | 1,229,000 tinybar | **10.8 h** |
+| `gpu-a100-80` 4 vCPU / 16 GiB | Modal | $0.000959/s | 1,533,000 tinybar | **8.7 h** |
 
 CPU is effectively free at this scale — 3,000 hours. **GPU is not, and it does not
 replenish inside the build window.** 10.8 hours of A100 is roughly one careless
@@ -147,7 +147,7 @@ the workload, so the constraint and the demo agree.
 | Lane | Anchor equals |
 | --- | --- |
 | gpu-t4 | ~3.2 minutes of compute |
-| gpu-a100-40 | ~63 seconds |
+| gpu-a100-80 | ~50 seconds |
 | cpu-small | **tens of minutes** |
 
 Per-session settlement is underwater for short jobs, and "one session per lane" means

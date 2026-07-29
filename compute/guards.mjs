@@ -167,5 +167,25 @@ export async function reapOrphans() {
       }
     }
   } catch (e) { reaped.errors.push(`daytona: ${e.message}`); }
+
+  // Modal was never actually swept — this function reported "modal: 0" whether
+  // or not anything was running, which reads as "checked and clean" when
+  // nothing had been checked. An orphaned A100 bills ~$2.50/hour in silence and
+  // is the most expensive failure mode in this system.
+  try {
+    if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET) {
+      const { ModalClient } = await import("modal");
+      const modal = new ModalClient({
+        tokenId: env.MODAL_TOKEN_ID, tokenSecret: env.MODAL_TOKEN_SECRET,
+      });
+      const app = await modal.apps.fromName("pinout-compute", { createIfMissing: true });
+      for await (const sb of modal.sandboxes.list({ appId: app.appId })) {
+        try { await sb.terminate(); reaped.modal++; } catch { /* already gone */ }
+      }
+    } else {
+      reaped.errors.push("modal: no credentials, NOT swept");
+    }
+  } catch (e) { reaped.errors.push(`modal: ${e.message}`); }
+
   return reaped;
 }
