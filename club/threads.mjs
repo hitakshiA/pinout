@@ -193,6 +193,24 @@ export function attachArtifact(threadId, artifactId) {
   t.updatedAt = Date.now(); persist(); return t;
 }
 
+export function rename(id, title) {
+  const t = threads.get(id);
+  if (!t) return null;
+  t.title = String(title || "New chat").slice(0, 120);
+  t.updatedAt = Date.now(); persist(); return t;
+}
+
+/**
+ * Delete a chat. Its files are left alone: they are content-addressed and may
+ * be shared with another chat, and the blob store is swept when the workspace
+ * closes rather than on every deletion.
+ */
+export function remove(id) {
+  const gone = threads.delete(id);
+  if (gone) persist();
+  return gone;
+}
+
 export function publicView(t) {
   return {
     id: t.id, workspaceId: t.workspaceId, title: t.title,

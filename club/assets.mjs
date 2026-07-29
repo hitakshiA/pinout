@@ -50,7 +50,7 @@ const TYPES = {
 /**
  * Store bytes against a workspace. Returns metadata only, never content.
  */
-export function put(workspaceId, { name, bytes }) {
+export function put(workspaceId, { name, bytes, threadId = null }) {
   const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   if (buf.length > MAX_ASSET_BYTES) {
     throw new Error(`file is ${buf.length} bytes, over the ${MAX_ASSET_BYTES} limit`);
@@ -63,13 +63,18 @@ export function put(workspaceId, { name, bytes }) {
   if (!existsSync(blob)) writeFileSync(blob, buf);
 
   const existing = [...assets.values()].find(
-    (a) => a.workspaceId === workspaceId && a.sha256 === sha256 && a.name === name
+    (a) => a.workspaceId === workspaceId && a.threadId === threadId &&
+           a.sha256 === sha256 && a.name === name
   );
   if (existing) return existing;
 
   const asset = {
     id: randomUUID(),
     workspaceId,
+    // Files belong to a chat, not to the account. Two chats in one workspace
+    // are two separate pieces of work and must not see each other's inputs or
+    // each other's results.
+    threadId,
     name,
     bytes: buf.length,
     sha256,
@@ -90,8 +95,8 @@ export function put(workspaceId, { name, bytes }) {
  * Provenance is kept because a result nobody can trace back to a paid session
  * is just a file.
  */
-export function deliver(workspaceId, { name, bytes, description, fromPath, sessionId }) {
-  const asset = put(workspaceId, { name, bytes });
+export function deliver(workspaceId, { name, bytes, description, fromPath, sessionId, threadId = null }) {
+  const asset = put(workspaceId, { name, bytes, threadId });
   asset.kind = "artifact";
   asset.description = description ?? null;
   asset.fromPath = fromPath ?? null;
@@ -101,16 +106,23 @@ export function deliver(workspaceId, { name, bytes, description, fromPath, sessi
   return asset;
 }
 
-export const forWorkspace = (wid) =>
-  [...assets.values()].filter((a) => a.workspaceId === wid && a.kind !== "artifact");
+const scope = (a, wid, tid) =>
+  a.workspaceId === wid && (tid === undefined || a.threadId === tid);
 
-export const artifactsOf = (wid) =>
-  [...assets.values()].filter((a) => a.workspaceId === wid && a.kind === "artifact");
+/** Inputs the human attached. Pass a threadId to scope to one chat. */
+export const forWorkspace = (wid, tid) =>
+  [...assets.values()].filter((a) => scope(a, wid, tid) && a.kind !== "artifact");
+
+/** Files the agent produced. Pass a threadId to scope to one chat. */
+export const artifactsOf = (wid, tid) =>
+  [...assets.values()].filter((a) => scope(a, wid, tid) && a.kind === "artifact");
 
 export const get = (id) => assets.get(id) ?? null;
 
-export function byName(workspaceId, name) {
-  return [...assets.values()].find((a) => a.workspaceId === workspaceId && a.name === name) ?? null;
+export function byName(workspaceId, name, threadId) {
+  return [...assets.values()].find(
+    (a) => scope(a, workspaceId, threadId) && a.name === name
+  ) ?? null;
 }
 
 /** Read the bytes back. Server-side only; this never goes into a prompt. */

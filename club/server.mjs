@@ -12,6 +12,8 @@ import { streamSSE } from "hono/streaming";
 import { env } from "../src/config.mjs";
 import * as ws from "./workspace.mjs";
 import * as rt from "./runtime.mjs";
+import * as assets from "./assets.mjs";
+import * as threads from "./threads.mjs";
 import { CUSTODY_DISCLOSURE, balanceOf, withdraw } from "./wallet.mjs";
 
 const app = new Hono();
@@ -39,6 +41,13 @@ app.get("/", (c) => c.json({
     run: "POST /workspace/:id/run",
     decide: "POST /workspace/:id/decide  (approve | deny | revise)",
     withdraw: "POST /workspace/:id/withdraw  (any time, even mid job)",
+    chats: "POST|GET /workspace/:id/chats",
+    chat: "GET /workspace/:id/chats/:chatId  (log, assets, artifacts, run)",
+    chatRun: "POST /workspace/:id/chats/:chatId/run",
+    chatFiles: "POST /workspace/:id/chats/:chatId/files",
+    attach: "POST /workspace/:id/files",
+    listFiles: "GET /workspace/:id/files",
+    download: "GET /workspace/:id/files/:assetId",
     fund: "POST /workspace/:id/fund",
     events: "GET /workspace/:id/events  (SSE)",
     close: "POST /workspace/:id/close",
@@ -186,6 +195,170 @@ app.post("/workspace/:id/close", async (c) => {
   } catch (e) {
     return c.json({ error: e.message }, 500);
   }
+});
+
+/**
+ * Chats.
+ *
+ * A workspace owns the wallet; a chat owns a conversation, its files and its
+ * results. That split is deliberate. Opening a Hedera account costs roughly
+ * 0.81 HBAR in fees, so giving every chat its own account would charge someone
+ * a dollar to say hello. Chats share the wallet and are isolated in every other
+ * respect: separate memory, separate inputs, separate artifacts.
+ */
+app.post("/workspace/:id/chats", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const body = await c.req.json().catch(() => ({}));
+  const t = threads.createThread(a.w.id, { title: body?.title ?? "New chat" });
+  return c.json(threads.publicView(t), 201);
+});
+
+app.get("/workspace/:id/chats", (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const run = rt.runOf(a.w.id);
+  return c.json({
+    chats: threads.forWorkspace(a.w.id).map((t) => ({
+      id: t.id, title: t.title, updatedAt: t.updatedAt,
+      turns: t.turns.length, artifacts: assets.artifactsOf(a.w.id, t.id).length,
+      running: run?.threadId === t.id,
+    })),
+    // one run at a time per workspace: several agents spending one wallet
+    // concurrently would race on the balance
+    activeChatId: run?.threadId ?? null,
+  });
+});
+
+/** Everything the UI needs to render one chat: log, files, results, run state. */
+app.get("/workspace/:id/chats/:chatId", (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  const run = rt.runOf(a.w.id);
+  const strip = (x) => ({
+    id: x.id, name: x.name, bytes: x.bytes, contentType: x.contentType,
+    sha256: x.sha256, description: x.description ?? null,
+  });
+  return c.json({
+    ...threads.publicView(t),
+    assets: assets.forWorkspace(a.w.id, t.id).map(strip),
+    artifacts: assets.artifactsOf(a.w.id, t.id).map(strip),
+    run: run?.threadId === t.id ? {
+      state: run.state, awaitingApproval: run.pendingApproval,
+      ceilingTinybar: run.ceilingTinybar, log: run.log.slice(-120),
+    } : null,
+  });
+});
+
+app.delete("/workspace/:id/chats/:chatId", (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  if (rt.runOf(a.w.id)?.threadId === t.id) {
+    return c.json({ error: "this chat has a run in progress; stop it first" }, 409);
+  }
+  threads.remove(t.id);
+  return c.json({ deleted: true });
+});
+
+/** Give the agent in this chat a task and a ceiling it cannot cross. */
+app.post("/workspace/:id/chats/:chatId/run", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const task = String(body?.task ?? "").trim();
+  const ceilingTinybar = Number(body?.ceilingTinybar ?? body?.budgetTinybar ?? 0);
+  if (!task) return c.json({ error: "give the agent a task" }, 400);
+  if (!(ceilingTinybar > 0)) return c.json({ error: "set a spending ceiling in tinybar" }, 400);
+  if (rt.runOf(a.w.id)) return c.json({ error: "this workspace already has a run in progress" }, 409);
+
+  threads.addTurn(t.id, { role: "user", text: task });
+  if (t.title === "New chat") threads.rename(t.id, task.slice(0, 60));
+  try {
+    const run = await rt.startRun(a.w.id, { task, ceilingTinybar, threadId: t.id });
+    // mirror the agent's output into the chat log so a reload shows the history
+    run.on("event", (ev) => {
+      if (ev.type === "answer") threads.addTurn(t.id, { role: "assistant", text: ev.text });
+      if (ev.type === "tool") threads.addTurn(t.id, { role: "tool", text: ev.name, tool: ev });
+    });
+    return c.json({ started: true, state: run.state, chatId: t.id });
+  } catch (e) { return c.json({ error: e.message }, 400); }
+});
+
+/** Attach a file to one chat. */
+app.post("/workspace/:id/chats/:chatId/files", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body?.name ?? "").trim();
+  if (!name || typeof body?.contentBase64 !== "string") {
+    return c.json({ error: "give a name and contentBase64" }, 400);
+  }
+  try {
+    const asset = assets.put(a.w.id, {
+      name, bytes: Buffer.from(body.contentBase64, "base64"), threadId: t.id,
+    });
+    threads.attachAsset(t.id, asset.id);
+    return c.json({
+      id: asset.id, name: asset.name, bytes: asset.bytes,
+      contentType: asset.contentType, sha256: asset.sha256,
+      needsChunking: asset.needsChunking,
+    }, 201);
+  } catch (e) { return c.json({ error: e.message }, 400); }
+});
+
+/**
+ * Attach a file to the workspace. The agent never sees these bytes; it sees a
+ * name and a size, and moves them onto a rented machine by name.
+ */
+app.post("/workspace/:id/files", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body?.name ?? "").trim();
+  const b64 = body?.contentBase64;
+  if (!name || typeof b64 !== "string") {
+    return c.json({ error: "give a name and contentBase64" }, 400);
+  }
+  try {
+    const asset = assets.put(a.w.id, { name, bytes: Buffer.from(b64, "base64") });
+    return c.json({
+      id: asset.id, name: asset.name, bytes: asset.bytes,
+      contentType: asset.contentType, sha256: asset.sha256,
+      needsChunking: asset.needsChunking,
+    }, 201);
+  } catch (e) { return c.json({ error: e.message }, 400); }
+});
+
+/** What the human gave, and what the agent produced. */
+app.get("/workspace/:id/files", (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const strip = (x) => ({
+    id: x.id, name: x.name, bytes: x.bytes, contentType: x.contentType,
+    sha256: x.sha256, description: x.description ?? null,
+  });
+  return c.json({
+    inputs: assets.forWorkspace(a.w.id).map(strip),
+    artifacts: assets.artifactsOf(a.w.id).map(strip),
+  });
+});
+
+/** Download a result. Streams bytes, not base64 in a JSON envelope. */
+app.get("/workspace/:id/files/:assetId", (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const asset = assets.get(c.req.param("assetId"));
+  // scoped to the workspace: a capability for one must not read another's files
+  if (!asset || asset.workspaceId !== a.w.id) return c.json({ error: "no such file" }, 404);
+  const buf = assets.read(asset.id);
+  return new Response(buf, {
+    headers: {
+      "Content-Type": asset.contentType,
+      "Content-Length": String(buf.length),
+      "Content-Disposition": `attachment; filename="${asset.name.replace(/"/g, "")}"`,
+      "X-Sha256": asset.sha256,
+    },
+  });
 });
 
 /**

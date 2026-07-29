@@ -145,6 +145,7 @@ export function runOf(id) { return runs.get(id) ?? null; }
 
 const DIR = join(ROOT, ".club");
 const stateFile = (id) => join(DIR, `conv-${id}.json`);
+// keyed by chat, not workspace: each chat is its own agent with its own memory
 
 /**
  * Conversation state on disk, so an approval pause outlives the process.
@@ -170,9 +171,10 @@ function fileState(workspaceId) {
 }
 
 export class Run extends EventEmitter {
-  constructor(workspaceId, { task, ceilingTinybar }) {
+  constructor(workspaceId, { task, ceilingTinybar, threadId = null }) {
     super();
     this.workspaceId = workspaceId;
+    this.threadId = threadId;
     this.task = task;
     this.ceilingTinybar = ceilingTinybar;
     this.state = RUN_STATE.PLANNING;
@@ -313,7 +315,7 @@ function buildTools(run) {
       "which machine the job needs.",
     inputSchema: z.object({}),
     execute: async () => {
-      const list = assets.forWorkspace(run.workspaceId);
+      const list = assets.forWorkspace(run.workspaceId, run.threadId);
       if (!list.length) return { inputs: [], note: "the human attached no files" };
       return {
         inputs: list.map((a) => ({
@@ -334,11 +336,11 @@ function buildTools(run) {
       "machine instead.",
     inputSchema: z.object({ name: z.string() }),
     execute: async (a) => {
-      const asset = assets.byName(run.workspaceId, a.name);
+      const asset = assets.byName(run.workspaceId, a.name, run.threadId);
       if (!asset) {
         return {
           error: `no input named ${a.name}`,
-          available: assets.forWorkspace(run.workspaceId).map((x) => x.name),
+          available: assets.forWorkspace(run.workspaceId, run.threadId).map((x) => x.name),
         };
       }
       return assets.preview(asset.id);
@@ -350,11 +352,11 @@ function buildTools(run) {
     // read at call time: the wallet does not exist when these are built
     getWallet: () => ws.get(run.workspaceId)?.wallet ?? null,
     assets: {
-      byName: (n) => assets.byName(run.workspaceId, n),
-      list: () => assets.forWorkspace(run.workspaceId),
+      byName: (n) => assets.byName(run.workspaceId, n, run.threadId),
+      list: () => assets.forWorkspace(run.workspaceId, run.threadId),
       read: (id) => assets.read(id),
       deliver: (spec) => {
-        const art = assets.deliver(run.workspaceId, spec);
+        const art = assets.deliver(run.workspaceId, { ...spec, threadId: run.threadId });
         run.say("artifact", {
           name: art.name, bytes: art.bytes, sha256: art.sha256,
           description: art.description, fromPath: art.fromPath,
@@ -390,7 +392,7 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
     instructions: SYSTEM,
     input,
     tools: buildTools(run),
-    state: fileState(run.workspaceId),
+    state: fileState(run.threadId ?? run.workspaceId),
     ...(approveToolCalls ? { approveToolCalls } : {}),
     ...(rejectToolCalls ? { rejectToolCalls } : {}),
   });
@@ -517,7 +519,7 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
 }
 
 /** Start a run. Returns immediately; progress arrives as run events. */
-export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinybar }) {
+export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinybar, threadId = null }) {
   const ceiling = ceilingTinybar ?? budgetTinybar;
   if (runs.has(workspaceId)) throw new Error("this workspace already has a run in progress");
   const w = ws.get(workspaceId);
@@ -527,7 +529,7 @@ export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinyba
     throw new Error(`ceiling above what this build will custody (${CUSTODY_DISCLOSURE.maxTinybar})`);
   }
 
-  const run = new Run(workspaceId, { task, ceilingTinybar: ceiling });
+  const run = new Run(workspaceId, { task, ceilingTinybar: ceiling, threadId });
   runs.set(workspaceId, run);
 
   (async () => {
