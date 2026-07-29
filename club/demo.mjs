@@ -84,14 +84,42 @@ function cleanupOn(wsId, cap) {
   let done = false;
   const bail = async () => {
     if (done) return; done = true;
+    // Awaited properly. The first version called exit() in the same tick the
+    // close was dispatched, so the request never left and the session stayed
+    // open. Three GPU slots ended up held by runs that had already been killed.
     try {
       await api(`/workspace/${wsId}/close`, { method: "POST", cap });
       console.log(C.dim("\nclosed workspace on exit"));
     } catch { /* going down anyway */ }
     process.exit(130);
   };
-  process.on("SIGINT", bail);
-  process.on("SIGTERM", bail);
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(sig, () => { bail(); });
+  }
+}
+
+/**
+ * Do not start a run that is going to be refused. A leaked session holds an
+ * accelerator until the expiry sweep notices, and starting anyway burns the
+ * funding approval on a rent that cannot succeed.
+ */
+async function waitForCapacity(lane = "gpu", tries = 40) {
+  const compute = process.env.PINOUT_URL ?? "http://localhost:4031";
+  for (let i = 0; i < tries; i++) {
+    try {
+      const h = await fetch(`${compute}/health`).then((r) => r.json());
+      const free = lane === "gpu"
+        ? h.activeGpuSessions < h.limits.maxConcurrentGpu
+        : h.activeSessions < h.limits.maxConcurrentSessions;
+      if (free && h.sellerSolvency?.solvent) return true;
+      if (i === 0) {
+        console.log(C.dim(`waiting for capacity: gpu ${h.activeGpuSessions}/` +
+          `${h.limits.maxConcurrentGpu}, solvent ${h.sellerSolvency?.solvent}`));
+      }
+    } catch { /* server may be restarting */ }
+    await new Promise((r) => setTimeout(r, 15_000));
+  }
+  return false;
 }
 
 async function main() {
@@ -108,6 +136,11 @@ async function main() {
   const wsId = workspace.id;
   console.log(C.dim(`workspace ${wsId.slice(0, 8)}`));
   cleanupOn(wsId, cap);
+
+  if (!await waitForCapacity("gpu")) {
+    console.log(C.bad("no capacity after waiting; not starting a run that will be refused"));
+    process.exit(3);
+  }
 
   const chat = await jsonOr(
     await api(`/workspace/${wsId}/chats`, { method: "POST", cap, body: { title: demo.name } }),
