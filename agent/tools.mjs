@@ -90,7 +90,8 @@ export function pinoutTools({
       "that is what run_compute needs. Omit lane for a token-billed data stream.",
     inputSchema: z.object({
       lane: z.string().optional()
-        .describe("compute lane e.g. cpu-small. Omit for token-billed streaming."),
+        .describe("compute lane, e.g. cpu-1 or gpu-t4. Call discover for the real " +
+                  "catalogue and prices. Omit for a token-billed stream."),
     }),
     execute: async (a) => {
       // A compute lane is a different priced route; the lane is committed in
@@ -218,7 +219,7 @@ function machineOr404(sessionId) {
   const m = rented.get(sessionId);
   if (!m) {
     throw new Error(
-      `no rented machine ${sessionId}. Rent one with rent_machine({lane:"cpu-small"}) ` +
+      `no rented machine ${sessionId}. Rent one with rent_machine({lane:"cpu-1"}) ` +
       `— and note that machines you released are gone.`);
   }
   return m;
@@ -235,11 +236,14 @@ function machineOr404(sessionId) {
       "you hold it, so release it when you are done and the unused seconds are " +
       "refunded on-chain. ALWAYS call release_machine when finished.",
     inputSchema: z.object({
-      lane: z.string().optional().describe("cpu-small (1 vCPU), cpu-4 (4 vCPU/8GiB), gpu-t4, gpu-a100-80. Default cpu-small"),
+      lane: z.string().optional().describe(
+        "cpu-1, cpu-2, cpu-4, gpu-t4, gpu-l4, gpu-a10, gpu-l40s, gpu-a100-80, " +
+        "gpu-h200, gpu-b200, gpu-b300. These are the only lanes that exist; " +
+        "call discover for prices. Default cpu-1"),
       maxSeconds: z.number().optional().describe("hard ceiling on seconds held, default 300"),
     }),
     execute: async (a) => {
-      const lane = a.lane ?? "cpu-small";
+      const lane = a.lane ?? "cpu-1";
       const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
       rented.set(m.sessionId, m);
       return {
@@ -353,7 +357,7 @@ function machineOr404(sessionId) {
     name: "run_compute",
     description:
       "Run Python on the machine you rented. REQUIRES a session opened with a " +
-      "compute lane (open_session({lane:'cpu-small'})) — a token-billed session " +
+      "compute lane (open_session({lane:'cpu-1'})) — a token-billed session " +
       "cannot run code. You are billed per SECOND the machine is held; it is " +
       "released the moment your code finishes and unused seconds are refunded. " +
       "If the session runs out of credits mid-job the machine is HELD, not killed, " +
@@ -394,7 +398,7 @@ function machineOr404(sessionId) {
       } catch (e) {
         return { error: e.message, secondsBilled: seconds,
                  ...clipOutput(stdout.join("\n")),
-                 hint: "if this session was not opened with a compute lane, open a new one: open_session({lane:'cpu-small'})" };
+                 hint: "if this session was not opened with a compute lane, open a new one: open_session({lane:'cpu-1'})" };
       }
       const log = received.get(a.sessionId) ?? [];
       for (const e of out.received) log.push(e);

@@ -335,8 +335,34 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
     // enough tinybar for 60. Both numbers were in the same sentence and neither
     // was wrong on its own, which is exactly the kind of thing a human skims
     // past. So say plainly what the money buys.
-    const rate = (await lanes()).get(ask.lane)?.tinybarPerSecond ?? null;
+    const catalogue = await lanes();
+    const rate = catalogue.get(ask.lane)?.tinybarPerSecond ?? null;
     const req = Number(ask.requestTinybar ?? 0);
+
+    // An agent asked to be funded for lane "local" here. No such lane is for
+    // sale, and because an unknown lane has no rate, every arithmetic check
+    // below silently passed and the human was shown a tidy request to buy a
+    // machine that does not exist. Nobody should be asked to approve that, so
+    // it is refused here rather than escalated: it is a machine-checkable
+    // mistake, not a judgement call.
+    if (catalogue.size && !catalogue.has(ask.lane)) {
+      run.badLaneAttempts = (run.badLaneAttempts ?? 0) + 1;
+      const real = [...catalogue.keys()].join(", ");
+      run.say("bad_lane", { lane: ask.lane, attempt: run.badLaneAttempts, available: real });
+
+      if (run.badLaneAttempts > 2) {
+        throw new Error(`agent kept asking for lanes that do not exist (last: ${ask.lane})`);
+      }
+      const callId = waiting.callId ?? waiting.id;
+      run.pendingApproval = null;
+      return await drive(run, {
+        input: [{ role: "user", content:
+          `There is no lane called "${ask.lane}". The lanes actually for sale are: ` +
+          `${real}. Call discover to read the catalogue and their prices, then ask ` +
+          `again for a real one.` }],
+        rejectToolCalls: [callId],
+      });
+    }
     const covers = rate ? Math.floor(req / rate) : null;
     const claimed = Number(ask.estimatedSeconds ?? 0);
 
