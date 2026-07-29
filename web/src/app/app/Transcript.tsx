@@ -52,22 +52,71 @@ export function toolLine(names: string[]) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Light markdown: bold, inline code, links. Enough for what an agent writes. */
-function rich(text: string) {
+/** Inline: bold, code, links. */
+function inline(text: string, key = 0) {
   const out: React.ReactNode[] = [];
   const re = /(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+)/g;
-  let last = 0, m: RegExpExecArray | null, k = 0;
+  let last = 0, m: RegExpExecArray | null, k = key;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const tok = m[0];
     if (tok.startsWith("**")) out.push(<strong key={k++}>{tok.slice(2, -2)}</strong>);
     else if (tok.startsWith("`")) out.push(<code key={k++}>{tok.slice(1, -1)}</code>);
-    else out.push(
-      <a key={k++} href={tok} target="_blank" rel="noreferrer">{tok}</a>
-    );
+    else out.push(<a key={k++} href={tok} target="_blank" rel="noreferrer">{tok}</a>);
     last = m.index + tok.length;
   }
   if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/**
+ * Block-level markdown, because agents write headings and lists and leaving
+ * "### CPU Lanes" on the page as literal hashes is worse than not styling it
+ * at all. Deliberately small: headings, bullets, rules, paragraphs. Anything
+ * more and this becomes a markdown library nobody asked for.
+ */
+function rich(text: string) {
+  const lines = text.split("\n");
+  const out: React.ReactNode[] = [];
+  let para: string[] = [];
+  let list: string[] = [];
+
+  const flushPara = () => {
+    if (!para.length) return;
+    out.push(<p key={`p${out.length}`} className="ws-p">{inline(para.join("\n"))}</p>);
+    para = [];
+  };
+  const flushList = () => {
+    if (!list.length) return;
+    out.push(
+      <ul key={`u${out.length}`} className="ws-ul">
+        {list.map((li, i) => <li key={i}>{inline(li)}</li>)}
+      </ul>
+    );
+    list = [];
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    const li = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (h) {
+      flushPara(); flushList();
+      out.push(<div key={`h${out.length}`} className="ws-h" data-l={h[1].length}>{inline(h[2])}</div>);
+    } else if (li) {
+      flushPara();
+      list.push(li[1]);
+    } else if (/^\s*(---+|===+)\s*$/.test(line)) {
+      flushPara(); flushList();
+      out.push(<hr key={`r${out.length}`} className="ws-hr" />);
+    } else if (!line.trim()) {
+      flushPara(); flushList();
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushPara(); flushList();
   return out;
 }
 

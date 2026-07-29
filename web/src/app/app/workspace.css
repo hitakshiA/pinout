@@ -341,3 +341,22 @@
   .ws-side { position: absolute; z-index: 20; height: 100%; }
   .ws-panel { position: absolute; right: 0; z-index: 20; height: 100%; width: 100%; max-width: 420px; }
 }
+
+/* agent prose blocks. an agent writes headings and lists; leaving "### CPU
+   Lanes" on the page as literal hashes is worse than not styling it at all */
+.ws-agent .ws-p { margin: 0 0 0.85em; }
+.ws-agent .ws-p:last-child { margin-bottom: 0; }
+.ws-agent .ws-h {
+  font-weight: 600; letter-spacing: -0.012em;
+  margin: 1.25em 0 0.5em; line-height: 1.3;
+}
+.ws-agent .ws-h[data-l="1"] { font-size: 1.3em; }
+.ws-agent .ws-h[data-l="2"] { font-size: 1.16em; }
+.ws-agent .ws-h[data-l="3"],
+.ws-agent .ws-h[data-l="4"] { font-size: 1.02em; color: var(--ws-lav); }
+.ws-agent .ws-ul { margin: 0 0 0.85em; padding-left: 1.15em; }
+.ws-agent .ws-ul li { margin: 0.24em 0; }
+.ws-agent .ws-ul li::marker { color: var(--ws-dim); }
+.ws-agent .ws-hr { border: none; border-top: 1px solid var(--ws-line); margin: 1.3em 0; }
+/* pre-wrap fought the block elements once they existed */
+.ws-agent { white-space: normal; }
