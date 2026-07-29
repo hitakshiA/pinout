@@ -118,9 +118,18 @@ export class PinoutClient {
           headers: { ...headers, "PAYMENT-SIGNATURE": encodePaymentSignatureHeader(retryPayload) },
         });
         if (res.status === 402) {
+          // Same number twice is not a negotiation, it is a refusal, and
+          // saying "re-quoted" about it sends the agent looking for a price
+          // change that never happened. The usual cause is that the session is
+          // already gone, so there is nothing to top up.
           throw new Error(
-            `the server re-quoted twice and would not settle. It first asked ${amount} ` +
-            `tinybar, then ${now}. Nothing was charged.`);
+            now === amount
+              ? `the server will not settle a payment for session ${id.slice(0, 8)} ` +
+                `at ${amount} tinybar and re-issued the same terms. The session is ` +
+                `most likely already closed or its machine released. Nothing was ` +
+                `charged. Rent a new machine rather than topping this one up.`
+              : `the server re-quoted twice and would not settle. It first asked ` +
+                `${amount} tinybar, then ${now}. Nothing was charged.`);
         }
       } else {
         throw new Error(

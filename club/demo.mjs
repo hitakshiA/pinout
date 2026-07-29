@@ -191,7 +191,9 @@ async function main() {
   const state = { done: false, failed: false, answer: null, paused: null, allDone: false };
 
   // follow the run the way the browser does, over SSE
-  const es = await fetch(`${BASE}/workspace/${wsId}/events?cap=${encodeURIComponent(cap)}`);
+  // no body timeout: a quiet stream during long GPU work is normal, not a fault
+  const es = await fetch(`${BASE}/workspace/${wsId}/events?cap=${encodeURIComponent(cap)}`,
+    { signal: AbortSignal.timeout(3 * 60 * 60_000) });
   const reader = es.body.getReader();
   const dec = new TextDecoder();
 

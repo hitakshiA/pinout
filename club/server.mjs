@@ -183,6 +183,20 @@ app.get("/workspace/:id/events", (c) => {
     stream.onAbort(() => ac.abort());
     const sent = new Set();
 
+    // A stream that goes quiet gets killed.
+    //
+    // Long GPU work produces no events for minutes at a time, and undici drops
+    // an idle response body after five, so a client watching a real job lost
+    // the connection mid-run and never saw it finish. Proxies do the same
+    // thing. A comment frame every fifteen seconds costs nothing and keeps
+    // every hop convinced the connection is alive.
+    const beat = setInterval(() => {
+      stream.writeSSE({ event: "ping", data: JSON.stringify({ at: Date.now() }) })
+        .catch(() => {});
+    }, 15_000);
+    ac.signal.addEventListener("abort", () => clearInterval(beat), { once: true });
+
+    try {
     while (!ac.signal.aborted) {
       let run = rt.runOf(a.w.id);
       if (!run) {
@@ -215,6 +229,7 @@ app.get("/workspace/:id/events", (c) => {
       });
       // loop round and wait for whatever the human asks next
     }
+    } finally { clearInterval(beat); }
   });
 });
 
