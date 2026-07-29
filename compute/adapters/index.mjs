@@ -11,6 +11,35 @@ import { env } from "../../src/config.mjs";
 
 /* ---------------------------------------------------------------- local ---- */
 /** Subprocess. Zero cost, zero cold start. Everything is developed against this. */
+/**
+ * Reassembles complete lines from arbitrary byte chunks.
+ *
+ * Every adapter used to do `String(chunk).split("\n").forEach(sink)`, which
+ * treats each chunk as if it began and ended on a line boundary. It does not: a
+ * pipe or WebSocket chunk lands wherever the kernel or network put it, so any
+ * line long enough to straddle a boundary was silently delivered as two lines.
+ *
+ * stdout is the ONLY channel by which results leave a rented machine, so this
+ * corrupted real output. Measured: a 1247-byte file base64'd to stdout arrived
+ * as a 412-byte fragment that still decoded to valid-looking CSV — wrong data
+ * that a consumer had no way to detect.
+ *
+ * The tail of an incomplete line is held until the rest arrives; flush() emits
+ * whatever is left when the stream ends (output need not end with a newline).
+ */
+export function lineAssembler(sink, prefix = "") {
+  let partial = "";
+  const push = (chunk) => {
+    partial += String(chunk);
+    if (!partial.includes("\n")) return;
+    const parts = partial.split("\n");
+    partial = parts.pop();                 // incomplete tail, keep for next chunk
+    for (const l of parts) sink(prefix + l);
+  };
+  push.flush = () => { if (partial !== "") { sink(prefix + partial); partial = ""; } };
+  return push;
+}
+
 export class LocalAdapter extends ComputeAdapter {
   constructor() { super(); this.jobs = new Map(); }
 
@@ -33,7 +62,12 @@ export class LocalAdapter extends ComputeAdapter {
   async attachStream(handle, sink) {
     const j = this.jobs.get(handle);
     if (!j) throw new Error(`no such job ${handle}`);
-    j.proc.stdout.on("data", (b) => String(b).split("\n").forEach((l) => l.trim() && sink(l)));
+    const out = lineAssembler(sink);
+    j.proc.stdout.on("data", out);
+    j.proc.stdout.on("end", () => out.flush());
+    const err = lineAssembler(sink, "[stderr] ");
+    j.proc.stderr?.on("data", err);
+    j.proc.stderr?.on("end", () => err.flush());
   }
 
   async isAlive(handle) { return this.jobs.get(handle)?.alive ?? false; }
@@ -87,11 +121,11 @@ export class DaytonaAdapter extends ComputeAdapter {
     if (!j) throw new Error(`no such job ${handle}`);
     // Fire-and-forget. The callback ONLY pushes to the sink — doing work here
     // would block the WebSocket and Daytona drops the stream.
-    j.streamTask = j.sb.process.getSessionCommandLogs(
-      j.sid, j.cmdId,
-      (out) => String(out).split("\n").forEach((l) => l.trim() && sink(l)),
-      (err) => String(err).split("\n").forEach((l) => l.trim() && sink(`[stderr] ${l}`)),
-    ).catch(() => { /* stream ends when the command does */ });
+    const out = lineAssembler(sink);
+    const err = lineAssembler(sink, "[stderr] ");
+    j.streamTask = j.sb.process.getSessionCommandLogs(j.sid, j.cmdId, out, err)
+      .catch(() => { /* stream ends when the command does */ })
+      .finally(() => { out.flush(); err.flush(); });
   }
 
   /**
@@ -171,10 +205,19 @@ export class ModalAdapter extends ComputeAdapter {
     if (!j) throw new Error(`no such job ${handle}`);
     (async () => {
       try {
-        for await (const chunk of j.p.stdout) {
-          String(chunk).split("\n").forEach((l) => l.trim() && sink(l));
-        }
+        const out = lineAssembler(sink);
+        for await (const chunk of j.p.stdout) out(chunk);
+        out.flush();
       } catch { /* process ended */ }
+    })();
+    // stderr was not captured at all, so a traceback from a GPU job vanished and
+    // the buyer saw a job that produced nothing and explained nothing.
+    (async () => {
+      try {
+        const err = lineAssembler(sink, "[stderr] ");
+        for await (const chunk of j.p.stderr ?? []) err(chunk);
+        err.flush();
+      } catch { /* no stderr stream */ }
     })();
   }
 
