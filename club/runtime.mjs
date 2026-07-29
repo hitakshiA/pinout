@@ -138,6 +138,7 @@ export class Run extends EventEmitter {
     this.pendingApproval = null;   // {callId, ask} while a human is deciding
     this.fundingWaiter = null;     // resolves when HBAR actually lands
     this.approvals = [];           // every decision, for the receipt
+    this.openSessions = new Set(); // compute sessions this run still holds
     this.abort = new AbortController();
   }
 
@@ -284,6 +285,8 @@ function buildTools(run) {
         return art;
       },
     },
+    onSessionOpen: (id) => run.openSessions.add(id),
+    onSessionClose: (id) => run.openSessions.delete(id),
     maxPerCallTinybar: Math.min(run.ceilingTinybar, 2_000_000_000),
     budgetTinybar: run.ceilingTinybar,
   });
@@ -532,13 +535,40 @@ async function finish(run) {
 export async function closeWorkspace(workspaceId) {
   const w = ws.get(workspaceId);
   if (!w) throw new Error("no such workspace");
-  runs.get(workspaceId)?.cancel();
+  const run = runs.get(workspaceId);
+  run?.cancel();
   runs.delete(workspaceId);
+
+  // Settle what the agent still holds BEFORE deleting the account it must be
+  // refunded to.
+  //
+  // Deleting first is unrecoverable, not merely untidy. The compute server
+  // refunds unused seconds by transferring to the buyer, and the buyer is this
+  // custodial account. Delete it while sessions are open and every one of
+  // those refunds fails ACCOUNT_DELETED, forever, on a sweep that retries them
+  // every sixty seconds and can never succeed. Two sessions worth 0.745 HBAR
+  // were lost exactly this way.
+  const closed = [];
+  if (w.wallet && run?.openSessions?.size) {
+    const base = env.PINOUT_URL ?? "http://localhost:4021";
+    for (const sessionId of run.openSessions) {
+      try {
+        const r = await fetch(`${base}/session/${sessionId}/close?cause=workspace-closed`,
+          { method: "POST" });
+        closed.push({ sessionId, ok: r.ok });
+      } catch (e) {
+        closed.push({ sessionId, ok: false, error: e.message });
+      }
+    }
+  }
 
   let swept = null;
   if (w.wallet) {
     swept = await sweepAndClose(w.wallet).catch((e) => ({ closed: false, error: e.message }));
   }
-  ws.update(workspaceId, { state: "closed", wallet: null, closedAt: Date.now(), swept });
+  ws.update(workspaceId, {
+    state: "closed", wallet: null, closedAt: Date.now(), swept,
+    sessionsClosed: closed,
+  });
   return swept;
 }

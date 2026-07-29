@@ -33,7 +33,7 @@ function clipOutput(text, limit = 6000) {
  */
 export function pinoutTools({
   base = env.PINOUT_URL ?? "http://localhost:4021",
-  accountId, privateKey, getWallet, assets,
+  accountId, privateKey, getWallet, assets, onSessionOpen, onSessionClose,
   maxPerCallTinybar = 5_000_000,
   budgetTinybar = 100_000_000,
 } = {}) {
@@ -104,6 +104,7 @@ export function pinoutTools({
         ? await pinout().openComputeSession(a.lane)
         : await pinout().openSession();
       received.set(s.sessionId, []);
+      onSessionOpen?.(s.sessionId);
       return {
         sessionId: s.sessionId, lane: s.lane ?? "token", unit: s.unit,
         credits: s.credits ?? s.secondsPurchased,
@@ -153,6 +154,7 @@ export function pinoutTools({
     inputSchema: z.object({ sessionId: z.string(), cause: z.string().optional() }),
     execute: async (a) => {
       const r = await pinout().close(a.sessionId, a.cause);
+      onSessionClose?.(a.sessionId);
       return {
         consumedTinybar: r.consumedAmount, refundTinybar: r.refundAmount,
         settlementTx: r.settlementTx, refundTx: r.refundTxUrl,
@@ -251,6 +253,7 @@ function machineOr404(sessionId) {
       const lane = a.lane ?? "cpu-1";
       const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
       rented.set(m.sessionId, m);
+      onSessionOpen?.(m.sessionId);
       return {
         sessionId: m.sessionId, lane, secondsPurchased: m.secondsPurchased,
         youCanNow: ["exec", "upload_file", "download_file", "list_files"],
@@ -349,6 +352,7 @@ function machineOr404(sessionId) {
     execute: async (a) => {
       const m = machineOr404(a.sessionId);
       const out = await m.release(a.cause ?? "work-finished");
+      onSessionClose?.(a.sessionId);
       rented.delete(a.sessionId);
       return {
         secondsHeld: m.secondsUsed,

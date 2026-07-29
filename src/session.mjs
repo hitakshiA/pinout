@@ -353,15 +353,31 @@ export async function settleExpired(ctx, sessions, cause = CAUSE.MAX_DURATION) {
       s.settlementResult = { settlement: anchor, refund: s.refund, unused,
         terminate: { type: "SessionTerminate", session: s.id, cause } };
     } catch (e) {
-      // Put it back where the next sweep will find it. Leaving it in SETTLING
-      // is what made these sessions invisible to `expired` and permanent.
-      s.state = "ACTIVE";
-      s.refundError = { at: Date.now(), message: e.message, owedTinybar: unused };
-      failed.push({ session: s.id, owedTinybar: unused, error: e.message });
+      // Some failures are permanent and retrying them is just noise. A deleted
+      // buyer account is never coming back, so the money cannot be returned to
+      // it however many times we try; the session is closed and the loss is
+      // recorded rather than retried every sixty seconds forever.
+      const terminal = /ACCOUNT_DELETED|INVALID_ACCOUNT_ID|ACCOUNT_EXPIRED/.test(e.message);
+      s.refundError = { at: Date.now(), message: e.message, owedTinybar: unused, terminal };
+      if (terminal) {
+        s.credits = 0;
+        s.state = "CLOSED";
+        s.settlementResult = { settlement: anchor, refund: null, unused,
+          unrefundable: e.message,
+          terminate: { type: "SessionTerminate", session: s.id, cause } };
+      } else {
+        // Put it back where the next sweep will find it. Leaving it in
+        // SETTLING is what made these sessions invisible to `expired`.
+        s.state = "ACTIVE";
+      }
+      failed.push({ session: s.id, owedTinybar: unused, error: e.message, terminal });
     }
   }
   if (failed.length) {
-    console.error(`expiry refund failed for ${failed.length} session(s), will retry:`,
+    const perm = failed.filter((f) => f.terminal).length;
+    console.error(
+      `expiry refund failed for ${failed.length} session(s)` +
+      (perm ? `, ${perm} PERMANENTLY (buyer account gone)` : ", will retry") + ":",
       failed.map((f) => `${f.session.slice(0, 8)} owes ${f.owedTinybar} (${f.error})`).join("; "));
   }
   return { anchor, sessions: due.length, refunds, failed };
