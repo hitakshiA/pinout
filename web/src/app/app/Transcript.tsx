@@ -38,15 +38,49 @@ const SAID: Record<string, string> = {
   run_compute: "ran a job",
 };
 
-/** "ran code twice, looked at the output" */
-export function toolLine(names: string[]) {
-  const counts = new Map<string, number>();
-  for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
-  const parts = [...counts.entries()].map(([n, c]) => {
-    const said = SAID[n] ?? `used ${n}`;
-    if (c === 1) return said;
-    if (c === 2) return `${said} twice`;
-    return `${said} ${c} times`;
+/* Present tense until it lands. "Rented a machine" written the instant the call
+ * is issued claims something that has not happened yet, and a rental can fail. */
+const DOING: Record<string, string> = {
+  discover: "reading the catalogue",
+  list_inputs: "looking at your files",
+  peek_input: "reading a file",
+  wallet_balance: "checking its balance",
+  request_hbar: "asking for funds",
+  rent_machine: "renting a machine",
+  open_session: "opening a session",
+  stage_input: "staging a file",
+  exec: "running code",
+  look_at: "looking at the output",
+  deliver_file: "delivering a file",
+  download_file: "downloading a file",
+  list_files: "listing files",
+  upload_file: "uploading a file",
+  release_machine: "releasing the machine",
+  close_session: "closing the session",
+  top_up: "buying more seconds",
+  spend_report: "checking the spend",
+  verify_session: "verifying the bill",
+  run_compute: "running a job",
+};
+
+export type ToolMark = { name: string; done?: boolean; ok?: boolean };
+
+/** "ran code twice, looked at the output" — or "running code" while it runs. */
+export function toolLine(marks: ToolMark[]) {
+  const counts = new Map<string, { n: number; pending: number; failed: number }>();
+  for (const m of marks) {
+    const e = counts.get(m.name) ?? { n: 0, pending: 0, failed: 0 };
+    e.n++;
+    if (!m.done) e.pending++;
+    else if (m.ok === false) e.failed++;
+    counts.set(m.name, e);
+  }
+  const parts = [...counts.entries()].map(([n, e]) => {
+    const pending = e.pending > 0;
+    const said = pending ? (DOING[n] ?? `using ${n}`) : (SAID[n] ?? `used ${n}`);
+    const times = e.n === 1 ? "" : e.n === 2 ? " twice" : ` ${e.n} times`;
+    // a failure is the one thing that must not be summarised away
+    return e.failed ? `${said}${times} (${e.failed} failed)` : `${said}${times}`;
   });
   const s = parts.join(", ");
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -149,9 +183,15 @@ export function AgentText({ text, streaming }: { text: string; streaming?: boole
   );
 }
 
-export function ToolLine({ names }: { names: string[] }) {
-  if (!names.length) return null;
-  return <div className="ws-tools ws-in">{toolLine(names)}</div>;
+export function ToolLine({ marks }: { marks: ToolMark[] }) {
+  if (!marks.length) return null;
+  const pending = marks.some((m) => !m.done);
+  const failed = marks.some((m) => m.done && m.ok === false);
+  return (
+    <div className="ws-tools ws-in" data-pending={pending} data-failed={failed}>
+      {toolLine(marks)}
+    </div>
+  );
 }
 
 /* ---------------- the ask ---------------- */

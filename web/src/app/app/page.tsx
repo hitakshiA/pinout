@@ -8,6 +8,7 @@ import {
 } from "./api";
 import {
   AgentText, ArtifactCard, FundingAsk, ToolLine, Working, useStickToBottom,
+  type ToolMark,
 } from "./Transcript";
 import { Panel } from "./Panel";
 
@@ -22,7 +23,7 @@ import { Panel } from "./Panel";
 
 type Block =
   | { k: "user"; id: string; text: string }
-  | { k: "agent"; id: string; text: string; tools: string[]; streaming?: boolean }
+  | { k: "agent"; id: string; text: string; tools: ToolMark[]; streaming?: boolean }
   | { k: "ask"; id: string; ev: RunEvent }
   | { k: "artifact"; id: string; name: string; bytes: number; kind: string }
   | { k: "decision"; id: string; verdict: string; amount: number; feedback: string | null }
@@ -39,9 +40,22 @@ export default function Workspace() {
   const [working, setWorking] = useState<{ what: string; since: number } | null>(null);
   const [ask, setAsk] = useState<RunEvent | null>(null);
   const [busy, setBusy] = useState(false);
+  // "the start request returned" is not "the job finished". A billed run is
+  // live until a terminal state arrives, and the composer must stay shut until
+  // then or a second submit lands a phantom turn the server will reject.
+  const [running, setRunning] = useState(false);
 
   const [sideOpen, setSideOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(true);
+  // below 1240 the rails float over the transcript rather than squeezing it
+  const [floating, setFloating] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1240px)");
+    const on = () => { setFloating(mq.matches); if (mq.matches) setPanelOpen(false); };
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
   const [tab, setTab] = useState("Wallet");
 
   const [draft, setDraft] = useState("");
@@ -92,6 +106,13 @@ export default function Workspace() {
       for (const t of c.turns) {
         if (t.role === "user") seed.push({ k: "user", id: t.id, text: t.text ?? "" });
         else if (t.role === "assistant") seed.push({ k: "agent", id: t.id, text: t.text ?? "", tools: [] });
+        else if (t.role === "tool" && t.text) {
+          // a reload used to lose every tool line; the turns hold them
+          const last = seed[seed.length - 1];
+          const mark: ToolMark = { name: t.text, done: true, ok: true };
+          if (last?.k === "agent") last.tools.push(mark);
+          else seed.push({ k: "agent", id: t.id, text: "", tools: [mark] });
+        }
       }
       for (const a of c.artifacts) {
         seed.push({ k: "artifact", id: a.id, name: a.name, bytes: a.bytes, kind: "Artifact" });
@@ -176,11 +197,31 @@ export default function Workspace() {
           for (let i = copy.length - 1; i >= 0; i--) {
             const blk = copy[i];
             if (blk.k === "agent") {
-              copy[i] = { ...blk, streaming: false, tools: [...blk.tools, String(ev.name ?? "")] };
+              copy[i] = { ...blk, streaming: false,
+                          tools: [...blk.tools, { name: String(ev.name ?? "") }] };
               return copy;
             }
           }
-          return [...copy, { k: "agent", id, text: "", tools: [String(ev.name ?? "")] }];
+          return [...copy, { k: "agent", id, text: "", tools: [{ name: String(ev.name ?? "") }] }];
+        });
+        break;
+      }
+      case "tool_settled": {
+        const name = String(ev.name ?? "");
+        setBlocks((b) => {
+          const copy = [...b];
+          for (let i = copy.length - 1; i >= 0; i--) {
+            const blk = copy[i];
+            if (blk.k !== "agent") continue;
+            const k = [...blk.tools].reverse().findIndex((m) => m.name === name && !m.done);
+            if (k === -1) continue;
+            const at = blk.tools.length - 1 - k;
+            const tools = [...blk.tools];
+            tools[at] = { ...tools[at], done: true, ok: ev.ok !== false };
+            copy[i] = { ...blk, tools };
+            return copy;
+          }
+          return copy;
         });
         break;
       }
@@ -248,7 +289,9 @@ export default function Workspace() {
         }]);
         break;
       case "state":
-        if (["done", "failed"].includes(String(ev.state))) { setWorking(null); refreshChat(); }
+        if (["done", "failed", "closed"].includes(String(ev.state))) {
+          setWorking(null); setRunning(false); refreshChat();
+        }
         break;
     }
   }, [refreshChat]);
@@ -256,7 +299,7 @@ export default function Workspace() {
   /* ---------- actions ---------- */
 
   const send = async () => {
-    if (!ws || !chatId || (!draft.trim() && !pending.length) || busy) return;
+    if (!ws || !chatId || (!draft.trim() && !pending.length) || busy || running) return;
     setBusy(true);
     try {
       for (const f of pending) {
@@ -272,11 +315,33 @@ export default function Workspace() {
       setBlocks((b) => [...b, { k: "user", id: `u${Date.now()}`, text: task }]);
       setDraft(""); setPending([]);
       setWorking({ what: "Thinking", since: Date.now() });
+      setRunning(true);
       // a generous ceiling; the agent asks for what it needs inside it
       await api.run(ws.id, ws.cap, chatId, task, 900_000_000);
       refreshChat();
     } catch (e) {
       setBlocks((b) => [...b, { k: "note", id: `e${Date.now()}`, text: String(e), tone: "bad" }]);
+    } finally { setBusy(false); }
+  };
+
+  /**
+   * Stop a run that is spending money. Closing the chat settles its sessions
+   * and sweeps the wallet, which is the honest meaning of "stop" here: the
+   * machine stops billing and whatever is left comes back.
+   */
+  const stopRun = async () => {
+    if (!ws || !chatId) return;
+    setBusy(true);
+    try {
+      await api.closeChat(ws.id, ws.cap, chatId);
+      setRunning(false); setWorking(null);
+      setBlocks((b) => [...b, {
+        k: "note", id: `s${Date.now()}`,
+        text: "Stopped. The machine was released and the balance returned.",
+      }]);
+      await refreshChat();
+    } catch (e) {
+      setBlocks((b) => [...b, { k: "note", id: `s${Date.now()}`, text: String(e), tone: "bad" }]);
     } finally { setBusy(false); }
   };
 
@@ -394,7 +459,7 @@ export default function Workspace() {
                   return (
                     <div className="ws-turn" key={b.id}>
                       {b.text && <AgentText text={b.text} streaming={b.streaming} />}
-                      <ToolLine names={b.tools} />
+                      <ToolLine marks={b.tools} />
                     </div>
                   );
                 }
@@ -453,6 +518,7 @@ export default function Workspace() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                 }}
+                disabled={running}
               />
               <div className="ws-composer-row">
                 <button className="ws-icon-btn" onClick={() => fileRef.current?.click()} aria-label="Attach">
@@ -466,12 +532,20 @@ export default function Workspace() {
                   <span className="ws-balance-sub">{pending.map((f) => f.name).join(", ")}</span>
                 )}
                 <span className="ws-top-spacer" />
-                <button className="ws-send" onClick={send}
-                        disabled={busy || (!draft.trim() && !pending.length)} aria-label="Send">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M12 19V5M5 12l7-7 7 7" />
-                  </svg>
-                </button>
+                {running ? (
+                  <button className="ws-send ws-stop" onClick={stopRun} aria-label="Stop">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="5" y="5" width="14" height="14" rx="2.5" />
+                    </svg>
+                  </button>
+                ) : (
+                  <button className="ws-send" onClick={send}
+                          disabled={busy || (!draft.trim() && !pending.length)} aria-label="Send">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 19V5M5 12l7-7 7 7" />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
             <div className="ws-disclaimer">
@@ -480,6 +554,9 @@ export default function Workspace() {
           </div>
           </div>
 
+          {floating && (panelOpen || !sideOpen) && panelOpen && (
+            <div className="ws-scrim" onClick={() => setPanelOpen(false)} />
+          )}
           {panelOpen && (
             <Panel chat={chat} wallet={wallet} tab={tab} setTab={setTab}
                    urlFor={(aid) => (ws ? api.fileUrl(ws.id, ws.cap, aid) : "#")}

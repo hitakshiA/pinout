@@ -586,6 +586,8 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
           name: ev.name ?? ev.toolName ?? "?",
           result: text.slice(0, 700),
         });
+        // a client showing "rented a machine" needs to know the rental landed
+        run.say("tool_settled", { name: ev.name ?? ev.toolName ?? "?", ok: !failed });
       }
     } catch { /* stream ends with the turn */ }
   })();
