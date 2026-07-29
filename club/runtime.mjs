@@ -26,6 +26,7 @@ import { ROOT, env } from "../src/config.mjs";
 import { pinoutTools } from "../agent/tools.mjs";
 import * as ws from "./workspace.mjs";
 import * as assets from "./assets.mjs";
+import * as threads from "./threads.mjs";
 import {
   createWorkspaceAccount, confirmFunding, balanceOf, sweepAndClose,
   CUSTODY_DISCLOSURE, MIN_FUND_TINYBAR,
@@ -46,6 +47,13 @@ async function lanes() {
   } catch { laneCache = new Map(); }
   return laneCache;
 }
+
+/** Every money event should be one click from the public record. */
+const NET = (env.HEDERA_NETWORK ?? "testnet").replace("hedera:", "");
+export const hashscanTx = (id) =>
+  id ? `https://hashscan.io/${NET}/transaction/${encodeURIComponent(id)}` : null;
+export const hashscanAccount = (id) =>
+  id ? `https://hashscan.io/${NET}/account/${id}` : null;
 
 export const RUN_STATE = {
   PLANNING: "planning",
@@ -344,7 +352,7 @@ function buildTools(run) {
       "request_hbar EARLY if the answer is thin.",
     inputSchema: z.object({}),
     execute: async () => {
-      const w = ws.get(run.workspaceId)?.wallet;
+      const w = threads.get(run.threadId)?.wallet;
       if (!w) return { funded: false, tinybar: 0, note: "no wallet yet, call request_hbar" };
       const tinybar = await balanceOf(w.accountId).catch(() => null);
       if (tinybar == null) return { error: "could not read the balance from the network" };
@@ -407,7 +415,7 @@ function buildTools(run) {
   const paid = pinoutTools({
     base: env.PINOUT_URL ?? "http://localhost:4021",
     // read at call time: the wallet does not exist when these are built
-    getWallet: () => ws.get(run.workspaceId)?.wallet ?? null,
+    getWallet: () => threads.get(run.threadId)?.wallet ?? null,
     assets: {
       byName: (n) => assets.byName(run.workspaceId, n, run.threadId),
       list: () => assets.forWorkspace(run.workspaceId, run.threadId),
@@ -576,7 +584,7 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
     // The account floor is Hedera's, not the job's, and the human is the one
     // being asked to send it. Show the number that will actually leave their
     // wallet, not the number the agent asked for.
-    const firstFunding = !ws.get(run.workspaceId)?.wallet;
+    const firstFunding = !threads.get(run.threadId)?.wallet;
     const transfer = firstFunding ? Math.max(req, MIN_FUND_TINYBAR) : req;
 
     run.say("approval_needed", {
@@ -704,34 +712,53 @@ export async function decide(workspaceId, { verdict, feedback }) {
  * Confirm the funding transfer and release the parked tool.
  * The amount is never taken on trust from the browser.
  */
-export async function applyFunding(workspaceId, { funderAccountId, expectTinybar }) {
+export async function applyFunding(workspaceId, { funderAccountId, expectTinybar, threadId }) {
   const w = ws.get(workspaceId);
   if (!w) throw new Error("no such workspace");
   const run = runs.get(workspaceId);
+  const tid = threadId ?? run?.threadId;
+  if (!tid) throw new Error("funding needs a chat: money belongs to a task, not an account");
+  const t = threads.get(tid);
+  if (!t || t.workspaceId !== workspaceId) throw new Error("no such chat");
 
-  if (!w.wallet) {
+  if (t.funder && t.funder !== funderAccountId) {
+    throw new Error(`this chat's wallet returns to ${t.funder} and cannot be funded from elsewhere`);
+  }
+
+  if (!t.wallet) {
     const acct = await createWorkspaceAccount({ funderAccountId, initialTinybar: expectTinybar });
-    ws.update(workspaceId, {
-      wallet: acct, funder: funderAccountId,
-      // marked spent so a later top-up cannot be "confirmed" by this deposit
-      fundingTxIds: [acct.openingTxId, acct.openingTxMirrorId].filter(Boolean),
+    threads.setWallet(tid, acct, funderAccountId);
+    // marked spent so a later top-up cannot be "confirmed" by this deposit
+    for (const id of [acct.openingTxId, acct.openingTxMirrorId]) threads.noteFundingTx(tid, id);
+    threads.addLedgerEntry(tid, {
+      kind: "wallet_opened", tinybar: acct.fundedTinybar,
+      accountId: acct.accountId, from: funderAccountId,
+      txId: acct.openingTxId, hashscan: hashscanTx(acct.openingTxId),
     });
     run?.fundingArrived({
       accountId: acct.accountId, tinybar: acct.fundedTinybar, opened: true,
-      requestedTinybar: acct.requestedTinybar,
+      requestedTinybar: acct.requestedTinybar, hashscan: hashscanTx(acct.openingTxId),
     });
-    return { accountId: acct.accountId, opened: true, tinybar: acct.fundedTinybar };
+    return { accountId: acct.accountId, opened: true, tinybar: acct.fundedTinybar,
+             hashscan: hashscanTx(acct.openingTxId) };
   }
 
   const seen = await confirmFunding({
-    accountId: w.wallet.accountId, funderAccountId, expectTinybar,
-    // every deposit is spent once; the account-opening transfer is already spent
-    consumedTxIds: w.fundingTxIds ?? [],
+    accountId: t.wallet.accountId, funderAccountId, expectTinybar,
+    consumedTxIds: t.fundingTxIds ?? [],
   });
   if (!seen.ok) return { pending: true };
-  ws.update(workspaceId, { fundingTxIds: [...(w.fundingTxIds ?? []), seen.txId] });
-  run?.fundingArrived({ accountId: w.wallet.accountId, tinybar: seen.amount, txId: seen.txId });
-  return { accountId: w.wallet.accountId, txId: seen.txId, tinybar: seen.amount };
+  threads.noteFundingTx(tid, seen.txId);
+  threads.addLedgerEntry(tid, {
+    kind: "funded", tinybar: seen.amount, from: funderAccountId,
+    txId: seen.txId, hashscan: hashscanTx(seen.txId),
+  });
+  run?.fundingArrived({
+    accountId: t.wallet.accountId, tinybar: seen.amount, txId: seen.txId,
+    hashscan: hashscanTx(seen.txId),
+  });
+  return { accountId: t.wallet.accountId, txId: seen.txId, tinybar: seen.amount,
+           hashscan: hashscanTx(seen.txId) };
 }
 
 /** Settle up once the model has nothing left to say. */
@@ -750,43 +777,59 @@ async function finish(run) {
 }
 
 /** Close: stop the run, sweep the balance home, delete the account. */
-export async function closeWorkspace(workspaceId) {
-  const w = ws.get(workspaceId);
-  if (!w) throw new Error("no such workspace");
-  const run = runs.get(workspaceId);
-  run?.cancel();
-  runs.delete(workspaceId);
+/**
+ * Close one chat: settle what it holds, sweep its wallet home, delete it.
+ *
+ * Ordering is the whole thing. The compute server refunds unused seconds by
+ * transferring to the buyer, and the buyer is this chat's account, so deleting
+ * it first makes every one of those refunds fail ACCOUNT_DELETED forever, on a
+ * sweep that retries and can never succeed. Sessions close, then the wallet.
+ */
+export async function closeChat(threadId) {
+  const t = threads.get(threadId);
+  if (!t) throw new Error("no such chat");
+  const run = runs.get(t.workspaceId);
+  const mine = run?.threadId === threadId;
+  if (mine) { run.cancel(); runs.delete(t.workspaceId); }
 
-  // Settle what the agent still holds BEFORE deleting the account it must be
-  // refunded to.
-  //
-  // Deleting first is unrecoverable, not merely untidy. The compute server
-  // refunds unused seconds by transferring to the buyer, and the buyer is this
-  // custodial account. Delete it while sessions are open and every one of
-  // those refunds fails ACCOUNT_DELETED, forever, on a sweep that retries them
-  // every sixty seconds and can never succeed. Two sessions worth 0.745 HBAR
-  // were lost exactly this way.
   const closed = [];
-  if (w.wallet && run?.openSessions?.size) {
+  if (mine && run?.openSessions?.size) {
     const base = env.PINOUT_URL ?? "http://localhost:4021";
     for (const sessionId of run.openSessions) {
       try {
-        const r = await fetch(`${base}/session/${sessionId}/close?cause=workspace-closed`,
+        const r = await fetch(`${base}/session/${sessionId}/close?cause=chat-closed`,
           { method: "POST" });
         closed.push({ sessionId, ok: r.ok });
-      } catch (e) {
-        closed.push({ sessionId, ok: false, error: e.message });
-      }
+      } catch (e) { closed.push({ sessionId, ok: false, error: e.message }); }
     }
   }
 
   let swept = null;
-  if (w.wallet) {
-    swept = await sweepAndClose(w.wallet).catch((e) => ({ closed: false, error: e.message }));
+  if (t.wallet) {
+    swept = await sweepAndClose(t.wallet).catch((e) => ({ closed: false, error: e.message }));
+    if (swept?.closed) {
+      threads.addLedgerEntry(threadId, {
+        kind: "swept", tinybar: swept.returnedTinybar, to: swept.to,
+      });
+    }
+    threads.setWallet(threadId, null, t.funder);
   }
-  ws.update(workspaceId, {
-    state: "closed", wallet: null, closedAt: Date.now(), swept,
-    sessionsClosed: closed,
-  });
-  return swept;
+  return { swept, sessionsClosed: closed };
+}
+
+/** Close a workspace: every chat's wallet goes home, then the workspace shuts. */
+export async function closeWorkspace(workspaceId) {
+  const w = ws.get(workspaceId);
+  if (!w) throw new Error("no such workspace");
+  runs.get(workspaceId)?.cancel();
+  runs.delete(workspaceId);
+
+  const chats = [];
+  for (const t of threads.forWorkspace(workspaceId)) {
+    if (!t.wallet) continue;
+    const out = await closeChat(t.id).catch((e) => ({ error: e.message }));
+    chats.push({ chatId: t.id, ...out });
+  }
+  ws.update(workspaceId, { state: "closed", wallet: null, closedAt: Date.now(), chats });
+  return { chats, swept: chats.map((c) => c.swept).filter(Boolean) };
 }

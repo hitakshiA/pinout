@@ -14,7 +14,7 @@ import * as ws from "./workspace.mjs";
 import * as rt from "./runtime.mjs";
 import * as assets from "./assets.mjs";
 import * as threads from "./threads.mjs";
-import { CUSTODY_DISCLOSURE, balanceOf, withdraw } from "./wallet.mjs";
+import { CUSTODY_DISCLOSURE, balanceOf, withdraw, sendToWorkspace } from "./wallet.mjs";
 
 const app = new Hono();
 app.use("*", cors({ origin: "*", allowHeaders: ["Content-Type", "Authorization"] }));
@@ -45,6 +45,10 @@ app.get("/", (c) => c.json({
     chat: "GET /workspace/:id/chats/:chatId  (log, assets, artifacts, run)",
     chatRun: "POST /workspace/:id/chats/:chatId/run",
     chatFiles: "POST /workspace/:id/chats/:chatId/files",
+    chatWallet: "GET /workspace/:id/chats/:chatId/wallet",
+    fundDirect: "POST /workspace/:id/chats/:chatId/fund-direct  (no browser wallet)",
+    chatWithdraw: "POST /workspace/:id/chats/:chatId/withdraw  (to any address)",
+    chatClose: "POST /workspace/:id/chats/:chatId/close",
     attach: "POST /workspace/:id/files",
     listFiles: "GET /workspace/:id/files",
     download: "GET /workspace/:id/files/:assetId",
@@ -394,6 +398,98 @@ app.post("/workspace/:id/withdraw", async (c) => {
   } catch (e) {
     return c.json({ error: e.message }, 500);
   }
+});
+
+/**
+ * Everything about one chat's money in a single call: balance, bill, and links.
+ */
+app.get("/workspace/:id/chats/:chatId/wallet", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  const tinybar = t.wallet ? await balanceOf(t.wallet.accountId).catch(() => null) : 0;
+  return c.json({
+    accountId: t.wallet?.accountId ?? null,
+    funder: t.funder ?? null,
+    tinybar, hbar: tinybar == null ? null : Number((tinybar / 1e8).toFixed(8)),
+    hashscan: t.wallet ? rt.hashscanAccount(t.wallet.accountId) : null,
+    ledger: (t.ledger ?? []).map((e) => ({
+      ...e, hbar: e.tinybar == null ? null : Number((e.tinybar / 1e8).toFixed(8)),
+    })),
+    custody: CUSTODY_DISCLOSURE,
+  });
+});
+
+/**
+ * Put HBAR into a chat's wallet without a browser wallet.
+ *
+ * The wallet flow is the real one and stays the default. This exists because a
+ * demo, a test, or a person without a Hedera wallet installed should still be
+ * able to watch the whole thing work end to end; it pays from the operator and
+ * says so plainly rather than pretending to be the user.
+ */
+app.post("/workspace/:id/chats/:chatId/fund-direct", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const tinybar = Number(body?.tinybar ?? 0);
+  if (!(tinybar > 0)) return c.json({ error: "give an amount in tinybar" }, 400);
+  if (tinybar > CUSTODY_DISCLOSURE.maxTinybar) {
+    return c.json({ error: "above what this build will custody", max: CUSTODY_DISCLOSURE.maxTinybar }, 400);
+  }
+  const operator = env.HEDERA_ACCOUNT_ID;
+  try {
+    if (t.wallet) {
+      const sent = await sendToWorkspace({ accountId: t.wallet.accountId, tinybar, from: operator });
+      // confirm through the same path a signed transfer takes
+      let out = null;
+      for (let i = 0; i < 15 && (!out || out.pending); i++) {
+        out = await rt.applyFunding(a.w.id, {
+          funderAccountId: operator, expectTinybar: tinybar, threadId: t.id,
+        });
+        if (!out.pending) break;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      return c.json({ ...out, sentTx: sent.txId, hashscan: rt.hashscanTx(sent.txId), direct: true });
+    }
+    const out = await rt.applyFunding(a.w.id, {
+      funderAccountId: operator, expectTinybar: tinybar, threadId: t.id,
+    });
+    return c.json({ ...out, direct: true });
+  } catch (e) { return c.json({ error: e.message }, 400); }
+});
+
+/** Send this chat's balance anywhere, at any time, including mid job. */
+app.post("/workspace/:id/chats/:chatId/withdraw", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  if (!t.wallet) return c.json({ error: "this chat has no wallet" }, 409);
+  const body = await c.req.json().catch(() => ({}));
+  const tinybar = body?.tinybar ? Number(body.tinybar) : null;
+  const to = body?.to ? String(body.to).trim() : null;
+  if (tinybar != null && !(tinybar > 0)) {
+    return c.json({ error: "tinybar must be positive, or omit it to send everything" }, 400);
+  }
+  try {
+    const out = await withdraw({ ...t.wallet, tinybar, to });
+    threads.addLedgerEntry(t.id, {
+      kind: "withdrawn", tinybar: out.withdrawn, to: out.to,
+      txId: out.txId, hashscan: rt.hashscanTx(out.txId),
+    });
+    rt.runOf(a.w.id)?.say("withdrawn", { ...out, hashscan: rt.hashscanTx(out.txId) });
+    return c.json({ ...out, hashscan: rt.hashscanTx(out.txId) });
+  } catch (e) { return c.json({ error: e.message }, 500); }
+});
+
+/** Close one chat: settle its sessions, sweep its wallet, keep the transcript. */
+app.post("/workspace/:id/chats/:chatId/close", async (c) => {
+  const a = claim(c); if (a.err) return a.err;
+  const t = threads.get(c.req.param("chatId"));
+  if (!t || t.workspaceId !== a.w.id) return c.json({ error: "no such chat" }, 404);
+  try { return c.json(await rt.closeChat(t.id)); }
+  catch (e) { return c.json({ error: e.message }, 500); }
 });
 
 app.get("/health", async (c) => c.json({

@@ -53,6 +53,14 @@ export function createThread(workspaceId, { title = "New chat" } = {}) {
     assetIds: [],
     artifactIds: [],
     tokensEstimate: 0,
+    // Each chat owns its money. Two tasks never share a purse, so one chat's
+    // overspend cannot strand another's job, and every task carries its own
+    // bill and its own history. It costs ~0.81 HBAR to open an account, which
+    // is the price of that isolation and worth paying.
+    wallet: null,        // {accountId, privateKey, boundFunder, ...}
+    funder: null,        // the only address a balance can be returned to
+    fundingTxIds: [],    // every deposit is spent once
+    ledger: [],          // payments, refunds and anchors, for the bill
   };
   threads.set(t.id, t);
   persist();
@@ -211,6 +219,32 @@ export function remove(id) {
   return gone;
 }
 
+/** Attach the wallet this chat opened. */
+export function setWallet(id, wallet, funder) {
+  const t = threads.get(id);
+  if (!t) return null;
+  t.wallet = wallet; t.funder = funder ?? t.funder;
+  t.updatedAt = Date.now(); persist(); return t;
+}
+
+export function noteFundingTx(id, txId) {
+  const t = threads.get(id);
+  if (!t || !txId) return null;
+  if (!t.fundingTxIds.includes(txId)) t.fundingTxIds.push(txId);
+  persist(); return t;
+}
+
+/**
+ * One line on the chat's bill. Everything a person would want a receipt for:
+ * what moved, which way, and where to look it up.
+ */
+export function addLedgerEntry(id, entry) {
+  const t = threads.get(id);
+  if (!t) return null;
+  t.ledger.push({ at: Date.now(), ...entry });
+  t.updatedAt = Date.now(); persist(); return t;
+}
+
 export function publicView(t) {
   return {
     id: t.id, workspaceId: t.workspaceId, title: t.title,
@@ -220,5 +254,8 @@ export function publicView(t) {
     tokensEstimate: t.tokensEstimate,
     contextLimit: CONTEXT_LIMIT,
     assetIds: t.assetIds, artifactIds: t.artifactIds,
+    // never the private key
+    wallet: t.wallet ? { accountId: t.wallet.accountId, funder: t.funder } : null,
+    ledger: t.ledger ?? [],
   };
 }

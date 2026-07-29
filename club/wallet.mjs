@@ -150,8 +150,14 @@ export async function sendToWorkspace({ accountId, tinybar, from }) {
  * still working; the agent simply finds itself short and asks for more, which
  * it already knows how to do. Only ever pays out to the bound funder.
  */
-export async function withdraw({ accountId, privateKey, boundFunder, tinybar, leaveTinybar = 100_000 }) {
-  if (!boundFunder) throw new Error("refusing to pay out an account with no bound funder");
+export async function withdraw({ accountId, privateKey, boundFunder, tinybar, to, leaveTinybar = 100_000 }) {
+  // `to` lets a human send the balance somewhere other than where it came from,
+  // which they are entitled to do with their own money. Without it the default
+  // is the bound funder, so the safe path stays the default and the deliberate
+  // one has to be asked for.
+  const target = to || boundFunder;
+  if (!target) throw new Error("refusing to pay out an account with no destination");
+  if (!/^\d+\.\d+\.\d+$/.test(target)) throw new Error(`${target} is not a Hedera account id`);
   const client = operator();
   const key = PrivateKey.fromStringDer(privateKey);
   try {
@@ -165,14 +171,14 @@ export async function withdraw({ accountId, privateKey, boundFunder, tinybar, le
 
     const tx = await new TransferTransaction()
       .addHbarTransfer(AccountId.fromString(accountId), Hbar.fromTinybars(-amount))
-      .addHbarTransfer(AccountId.fromString(boundFunder), Hbar.fromTinybars(amount))
+      .addHbarTransfer(AccountId.fromString(target), Hbar.fromTinybars(amount))
       .setTransactionMemo("pinout.club withdrawal")
       .freezeWith(client).sign(key);
     const resp = await tx.execute(client);
     const st = (await resp.getReceipt(client)).status.toString();
     if (st !== "SUCCESS") throw new Error(`withdrawal failed: ${st}`);
     return {
-      withdrawn: amount, to: boundFunder, txId: resp.transactionId.toString(),
+      withdrawn: amount, to: target, txId: resp.transactionId.toString(),
       balanceTinybar: bal - amount,
     };
   } finally { client.close(); }
