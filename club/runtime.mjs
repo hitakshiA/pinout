@@ -535,7 +535,36 @@ function buildTools(run) {
  * Every entry point (start, approve, reject) funnels through here so there is
  * one place that knows how a turn ends.
  */
-async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
+/**
+ * Upstream failures that are worth trying again.
+ *
+ * A run died on a bare "Response failed" with a rented machine still billing
+ * and four turns of work on it. That is the model API having a bad moment, not
+ * the job being impossible, and throwing the whole run away over it wastes
+ * both the money already spent and the machine still held.
+ */
+const TRANSIENT = /response failed|fetch failed|socket|ECONNRESET|ETIMEDOUT|502|503|504|overloaded|rate.?limit|timeout/i;
+
+async function drive(run, opts) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await driveOnce(run, opts);
+    } catch (e) {
+      lastErr = e;
+      if (!TRANSIENT.test(e?.message ?? "") || attempt === 3) throw e;
+      const wait = attempt * 4000;
+      run.say("retrying", {
+        attempt, of: 3, after: wait, reason: e.message,
+        note: "the model call failed; the machine is still held and the work is intact",
+      });
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
+async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
   const or = new OpenRouter({ apiKey: env.OPENROUTER_API_KEY });
 
   const result = or.callModel({
@@ -621,6 +650,7 @@ async function drive(run, { input, approveToolCalls, rejectToolCalls }) {
     if (/approval|pending/i.test(e?.message ?? "")) return "";
     throw e;
   });
+
 
   const needsApproval = await Promise.resolve(result.requiresApproval?.()).catch(() => false);
   const pending = (await Promise.resolve(result.getPendingToolCalls?.()).catch(() => null)) ?? [];

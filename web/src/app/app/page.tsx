@@ -304,6 +304,15 @@ export default function Workspace() {
         });
         refreshChat();
         break;
+      case "retrying":
+        setBlocks((b) => [...b, {
+          k: "note", id,
+          text: `The model call failed (${String(ev.reason ?? "")}). Retrying, ` +
+                `attempt ${ev.attempt} of ${ev.of}. Your machine is still held ` +
+                `and the work so far is intact.`,
+          tone: "warn",
+        }]);
+        break;
       case "error":
         setWorking(null);
         setBlocks((b) => [...b, {

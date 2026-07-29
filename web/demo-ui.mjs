@@ -37,6 +37,7 @@ for (let i = 0; i < 400; i++) {
     bal: document.querySelector(".ws-balance")?.textContent ?? null,
     decision: [...document.querySelectorAll(".ws-decision")].map((e) => e.textContent),
     stop: !!document.querySelector(".ws-stop"),
+    short: document.querySelector(".ws-shortfall")?.textContent ?? null,
   }));
   for (const t of s.tools) if (t && !seen.has(t)) { seen.add(t); console.log("  ·", t); }
   for (const d of s.decision) if (d && !seen.has("D" + d)) { seen.add("D" + d); console.log("  DECISION:", d); }
@@ -52,6 +53,18 @@ for (let i = 0; i < 400; i++) {
     await p.waitForTimeout(2500);
     await p.screenshot({ path: `/tmp/${TAG}-preview.png` });
     console.log("  preview open:", await p.evaluate(() => !!document.querySelector(".ws-preview")));
+  }
+  // top up when the agent is short, the way a person watching would
+  if (s.short && !seen.has("SHORT" + s.short)) {
+    seen.add("SHORT" + s.short);
+    console.log("  SHORTFALL:", s.short.replace(/\s+/g, " ").slice(0, 110));
+    const modes2 = await p.$$(".ws-panel-body .ws-tab");
+    if (modes2[1]) await modes2[1].click();
+    await p.waitForTimeout(300);
+    await p.fill(".ws-panel-body .ws-field", "2");
+    const top = await p.$(".ws-panel-body .ws-btn-primary");
+    if (top) { await top.click(); console.log("  topped up 2 HBAR mid-job"); }
+    await p.waitForTimeout(12000);
   }
   if (i % 12 === 0 && s.bal) console.log("  balance", s.bal, s.working ? `| ${s.working}` : "", s.stop ? "| stoppable" : "");
   if (seen.has("ART") && !s.working && !s.stop) break;
