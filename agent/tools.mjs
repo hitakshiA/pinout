@@ -26,8 +26,18 @@ function clipOutput(text, limit = 6000) {
   };
 }
 
-export function pinoutTools({ base = env.PINOUT_URL ?? "http://localhost:4021" } = {}) {
-  const client = new PinoutClient({ base, maxPerCallTinybar: 5_000_000, budgetTinybar: 100_000_000 });
+/**
+ * @param accountId/privateKey  pay from a specific wallet rather than the
+ *        operator's. pinout.club gives every workspace its own custodial
+ *        account, so without this every workspace would spend the host's money.
+ */
+export function pinoutTools({
+  base = env.PINOUT_URL ?? "http://localhost:4021",
+  accountId, privateKey,
+  maxPerCallTinybar = 5_000_000,
+  budgetTinybar = 100_000_000,
+} = {}) {
+  const client = new PinoutClient({ base, accountId, privateKey, maxPerCallTinybar, budgetTinybar });
   const received = new Map();
 
   const discover = tool({

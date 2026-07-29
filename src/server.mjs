@@ -461,6 +461,17 @@ app.use("/session", async (c, next) => {
 
 app.use("/compute/:lane", async (c, next) => {
   const lane = c.req.param("lane");
+  // `local` runs code in a subprocess on THIS host, not on an isolated rented
+  // machine. It exists for tests. It was reachable through the paid route and
+  // priced 30x under the cheapest real lane, so any agent asked for the
+  // cheapest option bought it and ran its code on the API server.
+  if (lane === "local") {
+    return c.json({
+      error: "the local lane is not for sale",
+      detail: "it runs in-process for testing and is not isolated compute",
+      lanes: Object.keys(LANES).filter((l) => l !== "local"),
+    }, 404);
+  }
   if (!LANES[lane]) return c.json({ error: `unknown lane ${lane}`, lanes: Object.keys(LANES) }, 404);
   const active = [...sessions.values()].filter((s) => s.state !== "CLOSED");
   const refusal = await admitAsync({
@@ -547,8 +558,7 @@ app.get("/lanes", (c) => c.json({
     sessionTinybar: v.creditTinybar * 120,
     maxSecondsPerSession: v.gpu ? LIMITS.maxSecondsPerSessionGpu : LIMITS.maxSecondsPerSessionCpu,
     buy: `POST /compute/${lane}`,
-  })).concat([{ lane: "local", vcpu: 1, memGiB: 1, tinybarPerSecond: 1000,
-                sessionTinybar: 300000, note: "in-process, for tests" }]),
+  })),
 }));
 app.get("/.well-known/x402", (c) => c.json(bazaarCatalog()));
 

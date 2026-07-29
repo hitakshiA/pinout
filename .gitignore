@@ -16,3 +16,6 @@ last-session.json
 
 # scratch scripts written during investigation, never part of the project
 .*.mjs
+
+# custodial workspace state: holds wallet keys, never commit
+.club/
