@@ -5,6 +5,7 @@ import { z } from "zod";
 import { PinoutClient } from "../src/client.mjs";
 import { verifySession } from "../src/verifier.mjs";
 import { env } from "../src/config.mjs";
+import { look, isVisual } from "./vision.mjs";
 
 /**
  * Truncating a job's stdout in the MIDDLE of a line, with no marker, made a
@@ -562,7 +563,33 @@ function machineOr404(sessionId) {
     },
   });
 
+  const look_at = tool({
+    name: "look_at",
+    description:
+      "Look at an image or a video on a machine you are renting and get back a " +
+      "description of what is actually in the pixels. Videos are sampled across " +
+      "their whole length, not just the first frame. This is the only way you " +
+      "can see; an exit code of 0 tells you the code ran, not that the output " +
+      "is right.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      path: z.string().describe("absolute path on the machine, e.g. /work/out.mp4"),
+      question: z.string().optional()
+        .describe("something specific to check, e.g. 'is a person visible?'"),
+    }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      const got = await m.download(a.path);
+      const buf = Buffer.isBuffer(got) ? got : Buffer.from(got.content ?? got, "base64");
+      try {
+        return await look(buf, a.path, a.question);
+      } catch (e) {
+        return { looked: false, error: e.message, bytes: buf.length };
+      }
+    },
+  });
+
   return [discover, open_session, rent_machine, exec, upload_file, download_file, list_files,
-          stage_input, deliver_file,
+          stage_input, deliver_file, look_at,
           release_machine, run_compute, top_up, stream, close_session, verify_session, spend_report];
 }
