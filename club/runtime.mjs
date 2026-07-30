@@ -117,6 +117,19 @@ How to work:
    filesystem and everything on it, and you pay again for the work you already
    did.
 
+   Once the meter is running, act. Every second spent surveying the machine is
+   a second you are paying for and not working.
+
+   Do not inventory what is installed, benchmark alternatives, or probe the
+   same file with three libraries to see which answers. Pick the approach you
+   would pick if you were paying by the second, because you are, and change it
+   only when it actually fails. A job that takes three minutes when written
+   directly has been watched taking thirty because the agent checked five
+   models before using one.
+
+   Exploration is free before you rent and expensive afterwards. Do it in the
+   planning turn.
+
    Match the machine to the step, not to the job. Preparation, parsing and
    cleaning belong on a CPU lane; only put the step that needs an accelerator
    on one, and release it as soon as that step is done. Holding a GPU through
