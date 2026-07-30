@@ -1,14 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Mark from "@/components/Mark";
 import {
   api, held, hold, hbar,
   type Chat, type ChatSummary, type RunEvent, type Wallet,
 } from "./api";
 import {
-  AgentText, ArtifactCard, FundingAsk, ToolLine, Working, useStickToBottom,
-  type ToolMark,
+  AgentText, ArtifactCard, FileRefProvider, FundingAsk, ToolLine, Working,
+  useStickToBottom, type ToolMark,
 } from "./Transcript";
 import { Panel } from "./Panel";
 import { Preview } from "./Preview";
@@ -421,6 +421,10 @@ export default function Workspace() {
    * can be a moment behind the event that announced it, so a miss re-reads
    * before giving up and showing the file list instead.
    */
+  const fileNames = useMemo(
+    () => [...(chat?.assets ?? []), ...(chat?.artifacts ?? [])].map((a) => a.name),
+    [chat?.assets, chat?.artifacts]);
+
   const openByName = async (name: string) => {
     const find = (c: Chat | null) =>
       c?.artifacts.find((x) => x.name === name) ?? c?.assets.find((x) => x.name === name);
@@ -602,6 +606,7 @@ export default function Workspace() {
               under the panel when it opens */}
           <div className="ws-centre">
           <div className="ws-scroll" ref={scrollRef}>
+          <FileRefProvider names={fileNames} onOpen={openByName}>
             <div className="ws-col">
               {!blocks.length && !working && (
                 <Examples busy={busy} onPick={pickExample} />
@@ -674,6 +679,7 @@ export default function Workspace() {
 
               {working && <div className="ws-turn"><Working what={working.what} since={working.since} /></div>}
             </div>
+          </FileRefProvider>
           </div>
 
           <div className="ws-composer-wrap">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, createContext, useContext, useMemo } from "react";
 import { hbar, type RunEvent } from "./api";
 
 /**
@@ -86,20 +86,80 @@ export function toolLine(marks: ToolMark[]) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Inline: bold, code, links. */
-function inline(text: string, key = 0) {
+/**
+ * Files the agent names in its answer, made openable where it names them.
+ *
+ * "I delivered person_gradient.mp4" is a dead end otherwise: the file exists,
+ * it is in the panel, and the reader has to go hunting for it in a list to see
+ * the thing the sentence is about. The names are known, so they become the
+ * link.
+ */
+const FileRefs = createContext<{
+  names: string[];
+  onOpen: (name: string) => void;
+} | null>(null);
+
+export function FileRefProvider({
+  names, onOpen, children,
+}: { names: string[]; onOpen: (n: string) => void; children: React.ReactNode }) {
+  const value = useMemo(() => ({ names, onOpen }), [names.join("\u0000"), onOpen]);
+  return <FileRefs.Provider value={value}>{children}</FileRefs.Provider>;
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+type Refs = { names: string[]; onOpen: (n: string) => void } | null;
+
+/** Split a run of plain text on any known filename. Pure: the context is read
+    once, in the component, because this runs inside loops. */
+function withFileRefs(text: string, key: number, ctx: Refs): React.ReactNode[] {
+  if (!ctx?.names.length) return [text];
+  // longest first, so report_final.csv is not eaten by report.csv
+  const names = [...ctx.names].sort((a, b) => b.length - a.length);
+  const re = new RegExp(`(${names.map(esc).join("|")})`, "g");
   const out: React.ReactNode[] = [];
-  const re = /(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+)/g;
   let last = 0, m: RegExpExecArray | null, k = key;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
+    const name = m[0];
+    out.push(
+      <button key={`f${k++}`} className="ws-fileref" onClick={() => ctx.onOpen(name)}
+              title={`Open ${name}`}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             strokeWidth="2.1" aria-hidden>
+          <path d="M6 3h8l4 4v14H6zM14 3v4h4" />
+        </svg>
+        {name}
+      </button>
+    );
+    last = m.index + name.length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/** Inline: bold, code, links, and any file this chat holds. */
+function inline(text: string, key = 0, ctx: Refs = null) {
+  const out: React.ReactNode[] = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+)/g;
+  let last = 0, m: RegExpExecArray | null, k = key;
+  const plain = (t: string) => out.push(...withFileRefs(t, k += 100, ctx));
+  while ((m = re.exec(text))) {
+    if (m.index > last) plain(text.slice(last, m.index));
     const tok = m[0];
-    if (tok.startsWith("**")) out.push(<strong key={k++}>{tok.slice(2, -2)}</strong>);
-    else if (tok.startsWith("`")) out.push(<code key={k++}>{tok.slice(1, -1)}</code>);
+    // a filename in backticks is still a filename, and is usually how it is written
+    if (tok.startsWith("**")) out.push(<strong key={k++}>{withFileRefs(tok.slice(2, -2), k += 100, ctx)}</strong>);
+    else if (tok.startsWith("`")) {
+      const body = tok.slice(1, -1);
+      const refs = withFileRefs(body, k += 100, ctx);
+      out.push(refs.length === 1 && typeof refs[0] === "string"
+        ? <code key={k++}>{body}</code>
+        : <span key={k++}>{refs}</span>);
+    }
     else out.push(<a key={k++} href={tok} target="_blank" rel="noreferrer">{tok}</a>);
     last = m.index + tok.length;
   }
-  if (last < text.length) out.push(text.slice(last));
+  if (last < text.length) plain(text.slice(last));
   return out;
 }
 
@@ -109,7 +169,7 @@ function inline(text: string, key = 0) {
  * at all. Deliberately small: headings, bullets, rules, paragraphs. Anything
  * more and this becomes a markdown library nobody asked for.
  */
-function rich(text: string) {
+function rich(text: string, ctx: Refs = null) {
   const lines = text.split("\n");
   const out: React.ReactNode[] = [];
   let para: string[] = [];
@@ -117,14 +177,14 @@ function rich(text: string) {
 
   const flushPara = () => {
     if (!para.length) return;
-    out.push(<p key={`p${out.length}`} className="ws-p">{inline(para.join("\n"))}</p>);
+    out.push(<p key={`p${out.length}`} className="ws-p">{inline(para.join("\n"), 0, ctx)}</p>);
     para = [];
   };
   const flushList = () => {
     if (!list.length) return;
     out.push(
       <ul key={`u${out.length}`} className="ws-ul">
-        {list.map((li, i) => <li key={i}>{inline(li)}</li>)}
+        {list.map((li, i) => <li key={i}>{inline(li, 0, ctx)}</li>)}
       </ul>
     );
     list = [];
@@ -136,7 +196,7 @@ function rich(text: string) {
     const li = /^\s*[-*]\s+(.*)$/.exec(line);
     if (h) {
       flushPara(); flushList();
-      out.push(<div key={`h${out.length}`} className="ws-h" data-l={h[1].length}>{inline(h[2])}</div>);
+      out.push(<div key={`h${out.length}`} className="ws-h" data-l={h[1].length}>{inline(h[2], 0, ctx)}</div>);
     } else if (li) {
       flushPara();
       list.push(li[1]);
@@ -175,9 +235,10 @@ export function Working({ what, since }: { what: string; since: number }) {
 
 /** Agent prose, typed rather than pasted. */
 export function AgentText({ text, streaming }: { text: string; streaming?: boolean }) {
+  const ctx = useContext(FileRefs);   // read once, here, not inside the loops
   return (
     <div className="ws-agent">
-      {rich(text)}
+      {rich(text, ctx)}
       {streaming && <span className="ws-caret" />}
     </div>
   );

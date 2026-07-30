@@ -668,3 +668,28 @@
   border-color: var(--ws-purple);
   background: color-mix(in oklab, var(--ws-raise) 82%, var(--ws-purple));
 }
+
+/* A filename in the agent's prose is the file. Reads as part of the sentence,
+   not as a button dropped into it. */
+.ws-fileref {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 1px;
+  padding: 1px 6px 2px;
+  border: 1px solid color-mix(in oklab, var(--ws-purple) 38%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--ws-purple) 13%, transparent);
+  color: var(--ws-lav);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.88em;
+  line-height: 1.35;
+  cursor: pointer;
+  vertical-align: baseline;
+  transition: background .14s ease, border-color .14s ease;
+}
+.ws-fileref:hover {
+  border-color: var(--ws-purple);
+  background: color-mix(in oklab, var(--ws-purple) 26%, transparent);
+}
+.ws-fileref > svg { opacity: .8; flex: none; }

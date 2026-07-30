@@ -564,6 +564,65 @@ function buildTools(run) {
     },
   });
 
+  /**
+   * Read a file in this chat properly, to answer a question about it.
+   *
+   * peek_input gives 800 characters, which is enough to decide what machine to
+   * rent and nothing else. Someone asking "what does this CSV actually say"
+   * was getting an agent that rented a machine to read a 4 KB file, or worse
+   * answered from the first few lines and did not mention it had only seen
+   * those. Small text files need no compute; the server is already holding
+   * the bytes.
+   */
+  const read_file = tool({
+    name: "read_file",
+    description:
+      "Read a text file in this chat in full, whether the human attached it or " +
+      "you made it. Free, no machine needed. Use this to answer questions about " +
+      "a file's contents directly in chat. For big files or binary ones, rent a " +
+      "machine and use read_document or exec instead.",
+    inputSchema: z.object({
+      name: z.string(),
+      maxChars: z.number().optional().describe("default 40000"),
+    }),
+    execute: async (a) => {
+      const asset = assets.byName(run.workspaceId, a.name, run.threadId);
+      if (!asset) {
+        return {
+          error: `no file named ${a.name} in this chat`,
+          available: [
+            ...assets.forWorkspace(run.workspaceId, run.threadId),
+            ...assets.artifactsOf(run.workspaceId, run.threadId),
+          ].map((x) => x.name),
+        };
+      }
+      const cap = Math.min(a.maxChars ?? 40_000, 200_000);
+      // The type sniff is on the name as well as the header, because an upload
+      // arrives with whatever the browser guessed, which for .csv is often
+      // nothing at all.
+      const textish = /^(text\/|application\/(json|xml|csv|x-ndjson)$)/.test(asset.contentType ?? "") ||
+                      /\.(txt|csv|tsv|json|jsonl|md|markdown|log|xml|ya?ml|ini|toml|py|js|ts|sql|r|sh|c|cpp|java|go|rs|rb)$/i
+                        .test(asset.name);
+      if (!textish) {
+        return {
+          readable: false,
+          why: `${asset.name} is ${asset.contentType || "binary"}, which has no text form. ` +
+               `Stage it on a machine and use read_document for documents and audio, ` +
+               `or look_at for images and video.`,
+        };
+      }
+      const buf = assets.read(asset.id);
+      const text = buf.subarray(0, cap).toString("utf8");
+      return {
+        name: asset.name, bytes: asset.bytes, text,
+        truncated: buf.length > cap,
+        ...(buf.length > cap
+          ? { note: `showing the first ${cap} of ${buf.length} bytes` }
+          : {}),
+      };
+    },
+  });
+
   const paid = pinoutTools({
     base: env.PINOUT_URL ?? "http://localhost:4021",
     // read at call time: the wallet does not exist when these are built
@@ -605,7 +664,7 @@ function buildTools(run) {
     budgetTinybar: run.ceilingTinybar,
   });
 
-  run.tools = [request_hbar, wallet_balance, list_inputs, peek_input, ...paid];
+  run.tools = [request_hbar, wallet_balance, list_inputs, peek_input, read_file, ...paid];
   return run.tools;
 }
 
