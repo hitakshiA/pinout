@@ -18,7 +18,7 @@ git config --global --add safe.directory /home/pinout/pinout
 sudo -u pinout git fetch -q origin main
 sudo -u pinout git reset -q --hard origin/main
 cd web
-echo 'NEXT_PUBLIC_CLUB_URL=http://$IP:4022' > .env.production
+echo 'NEXT_PUBLIC_CLUB_URL=https://api.pinout.club' > .env.production
 chown pinout:pinout .env.production
 sudo -u pinout npm install --no-audit --no-fund 2>&1 | tail -2
 sudo -u pinout npx next build 2>&1 | tail -4
