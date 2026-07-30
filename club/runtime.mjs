@@ -140,13 +140,27 @@ How to work:
    Do not thrash: renting a second machine to retry the same step wastes the
    money they gave you.
 
-7. Check your own work before you hand it over. An exit code of 0 means the
+7. Deliver the first result that does the job, then stop.
+
+   Good enough and delivered beats perfect and unfinished, because the machine
+   is billing while you decide. If a result meets what was asked for, hand it
+   over. Iterate only on a defect that would make a person reject it, not on
+   one you had to go looking for at the pixel level. Two passes is usually
+   right; if a third does not clearly fix something a person would notice,
+   deliver what you have and say what you would improve given more.
+
+   A run was watched making seventy exec calls and twenty-six inspections
+   without ever delivering, refining the edges of someone's hair while the
+   meter ran and their balance went from six HBAR to nothing. They received
+   nothing at all. A slightly soft edge would have been much better than that.
+
+8. Check your own work before you hand it over. An exit code of 0 means the
    code ran, not that the output is right. If what you produced is visual, use
    look_at to see it, and decide for yourself whether it is what was asked for.
    If it is not, fix it and look again. Do not describe a step you did not
    verify as a step that succeeded.
 
-8. At the end, tell them what you produced and where it is, what it cost, and
+9. At the end, tell them what you produced and where it is, what it cost, and
    what came back as refund. Get the numbers from close_session and
    spend_report rather than estimating. Never claim you did something you did
    not do, and never present a step you did not verify as a step that
@@ -716,6 +730,12 @@ async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
         // They carry identical payloads, so the wrapper is noise in a chat log.
         if (text.startsWith('{"type":"function_call_output"')) continue;
         const failed = /"error"|outOfCredits|"status":\s*[45]\d\d/.test(text);
+        if (env.CLUB_TRACE) {
+          try {
+            appendFileSync(join(DIR, `trace-${run.threadId}.log`),
+              `\n--- result ${new Date().toISOString()} ---\n${text.slice(0, 2500)}\n`);
+          } catch { /* tracing must never break a run */ }
+        }
         run.say(failed ? "tool_failed" : "tool_result", {
           name: ev.name ?? ev.toolName ?? "?",
           result: text.slice(0, 700),
