@@ -231,10 +231,8 @@ export class PinoutClient {
     let starved = null;
     const streamDone = this.stream(id, {
       n: maxSeconds, provider: "compute", hold: true,
-      onEvent: (e) => {
-        if (e?.ready) { ready = true; return; }   // up, and not a billed second
-        ticks++; onTick?.(ticks);
-      },
+      onEvent: () => { ticks++; onTick?.(ticks); },
+      onReady: () => { ready = true; },
       onPaused: async () => {
         paused = true;
         // The cap used to be 5. That was right when every top-up was a
@@ -381,7 +379,7 @@ export class PinoutClient {
    * the top-up threshold — the socket is NOT dropped to top up.
    */
   async stream(sessionId, { n = 500, provider, code, prompt, onEvent, onLow, onCheckpoint,
-                            onPaused, onResumed, onWaiting, hold = false } = {}) {
+                            onPaused, onResumed, onWaiting, onReady, hold = false } = {}) {
     const q = new URLSearchParams({ n: String(n) });
     if (provider) q.set("provider", provider);
     if (hold) q.set("hold", "1");
@@ -427,6 +425,12 @@ export class PinoutClient {
               // never fires on a large one.
               const line = this.thresholds.get(sessionId) ?? 400;
               if (data.remainingUnits <= line) await onLow?.(data);
+            } else if (event === "SessionReady") {
+              // The machine is up. Its own event, because it is not a billed
+              // second and the dispatch below silently drops anything it does
+              // not name: the frame was being emitted, forwarded and then
+              // thrown away here, so every rent waited out its full timeout.
+              onReady?.(data);
             } else if (event === "SessionPaused") {
               // The machine is held, not billing. Top up and the SAME job continues.
               onPaused?.(data);
