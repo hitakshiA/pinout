@@ -14,7 +14,7 @@ await p.waitForTimeout(300);
 const modes = await p.$$(".ws-panel-body .ws-tab");
 if (modes[1]) await modes[1].click();
 await p.waitForTimeout(300);
-await p.fill(".ws-panel-body .ws-field", "3");
+await p.fill(".ws-panel-body .ws-field", "9");
 const fund = await p.$(".ws-panel-body .ws-btn-primary");
 if (fund) { await fund.click(); console.log("funding 3 HBAR..."); }
 await p.waitForTimeout(14000);
