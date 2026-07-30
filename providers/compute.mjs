@@ -176,7 +176,29 @@ export const compute = {
                     stdout: "", note: "topped up — same machine, job never stopped." };
           }
 
-          const elapsedSec = Math.floor((Date.now() - meterStart) / 1000);
+          // Bill compute, not custody.
+          //
+          // The meter used to follow the wall clock, so a held machine charged
+          // for every second including the ones where nothing was running. A
+          // traced run spent 80% of its elapsed time between tool calls, with
+          // the agent deliberating and the machine billing: two minutes of paid
+          // silence went on deciding whether it could afford to continue. It
+          // ran out of money reasoning about money.
+          //
+          // Now the meter advances only while code is executing. An idle
+          // machine is held, not charged, which is what a buyer thinks they are
+          // paying for when they rent by the second.
+          // One-shot mode runs the buyer's code for the whole session, so
+          // there the wall clock IS compute time. Only a held machine, which
+          // sits idle between exec calls, needs the distinction.
+          let elapsedSec;
+          if (hold) {
+            const j = jobs.get(sessionId);
+            const busyNow = j?.busySince ? Date.now() - j.busySince : 0;
+            elapsedSec = Math.floor((((j?.billedMs ?? 0) + busyNow)) / 1000);
+          } else {
+            elapsedSec = Math.floor((Date.now() - meterStart) / 1000);
+          }
           while (emitted < Math.min(elapsedSec, n)) {
             const out = buffer.splice(0, buffer.length);
             yield {
@@ -243,7 +265,17 @@ function requireCapability(j, name) {
 export async function execOnMachine(sessionId, code, sink) {
   const j = machineFor(sessionId);
   requireCapability(j, "exec");
-  return await j.adapter.exec(j.handle, code, sink);
+  // The meter follows this flag. Billing starts when code starts and stops
+  // when it stops, so an agent thinking between calls is not charged for the
+  // silence.
+  j.busySince = Date.now();
+  j.execs = (j.execs ?? 0) + 1;
+  try {
+    return await j.adapter.exec(j.handle, code, sink);
+  } finally {
+    j.billedMs = (j.billedMs ?? 0) + (Date.now() - j.busySince);
+    j.busySince = null;
+  }
 }
 
 export async function putFile(sessionId, path, buf) {
