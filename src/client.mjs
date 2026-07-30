@@ -323,6 +323,7 @@ export class PinoutClient {
       // and plans as if it had forever, which is how a job loses three
       // machines in a row and pays to redo the same work each time.
       maxSessionDurationSeconds: s.maxSessionDurationSeconds ?? null,
+      pricePerSecondTinybar: s.pricePerSecondTinybar ?? null,
       get secondsUsed() { return ticks; },
       get paused() { return paused; },
       get topUps() { return topUps; },

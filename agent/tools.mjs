@@ -280,6 +280,7 @@ function machineOr404(sessionId) {
       // recorded here and reported on every exec rather than only at rent time
       m._rentedAt = Date.now();
       m._ceiling = m.maxSessionDurationSeconds ?? null;
+      m._rate = m.pricePerSecondTinybar ?? null;
       onSessionOpen?.(m.sessionId, lane);
       // A machine has a wall clock, and an agent that does not know it plans a
       // job it cannot finish. One ran 31 exec calls across three machines,
@@ -376,10 +377,27 @@ function machineOr404(sessionId) {
       const life = m._ceiling ?? null;
       const lifeLeft = life != null && age != null ? Math.max(0, life - age) : null;
       const dying = lifeLeft != null && lifeLeft <= Math.max(120, Math.floor(life * 0.2));
+      // Put the price on every call.
+      //
+      // Being told once that the meter is running does not survive twenty tool
+      // calls. An agent was watched inventorying packages, re-probing the same
+      // file with two libraries and benchmarking five models before starting
+      // work that takes three minutes, and a warning in its instructions did
+      // not change that at all. A number attached to the thing it just did
+      // might: this call cost that much, and you have spent this much so far.
+      const rate = m._rate ?? null;
+      const thisCall = rate ? Math.round((r.ms / 1000) * rate) : null;
+      const spent = client ? client.spent : null;
       return {
         exitCode: r.exitCode, ms: r.ms,
         ...clipOutput(r.stdout ?? ""),
         stderr: (r.stderr ?? "").slice(0, 4000),
+        ...(thisCall != null ? {
+          thisCallCostHbar: Number((thisCall / 1e8).toFixed(6)),
+        } : {}),
+        ...(spent != null ? {
+          spentSoFarHbar: Number((spent / 1e8).toFixed(4)),
+        } : {}),
         secondsHeldSoFar: m.secondsUsed,
         secondsRemaining: left,
         ...(lifeLeft != null ? { machineLifetimeRemaining: lifeLeft } : {}),
