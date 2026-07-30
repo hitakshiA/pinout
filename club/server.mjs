@@ -310,10 +310,30 @@ app.post("/workspace/:id/chats/:chatId/run", async (c) => {
   if (!(ceilingTinybar > 0)) return c.json({ error: "set a spending ceiling in tinybar" }, 400);
   if (rt.runOf(a.w.id)) return c.json({ error: "this workspace already has a run in progress" }, 409);
 
+  // The transcript keeps what the human typed; the agent is told what came
+  // with it.
+  //
+  // Attaching a video and writing "remove the background" used to leave the
+  // agent to guess: it could call list_inputs and see every file in the chat,
+  // but nothing said which of them this message was about, so people learned
+  // to name the file in the prompt. Anything that arrived since the previous
+  // message came with this one, and saying so is the server's job, not
+  // theirs.
+  const lastUserAt = [...t.turns].reverse().find((x) => x.role === "user")?.at ?? 0;
+  const fresh = assets.forWorkspace(a.w.id, t.id)
+    .filter((x) => (x.createdAt ?? 0) > lastUserAt);
+  const taskForAgent = fresh.length
+    ? `${task}\n\nAttached to this message: ` +
+      fresh.map((x) => `${x.name} (${x.contentType || "unknown type"}, ${x.bytes} bytes)`)
+           .join(", ") +
+      `. They are already in this chat; stage_input puts them on a machine by name.`
+    : task;
+
   threads.addTurn(t.id, { role: "user", text: task });
   if (t.title === "New chat") threads.rename(t.id, task.slice(0, 60));
   try {
-    const run = await rt.startRun(a.w.id, { task, ceilingTinybar, threadId: t.id });
+    const run = await rt.startRun(a.w.id, {
+      task: taskForAgent, ceilingTinybar, threadId: t.id });
     // mirror the agent's output into the chat log so a reload shows the history
     run.on("event", (ev) => {
       if (ev.type === "answer") threads.addTurn(t.id, { role: "assistant", text: ev.text });

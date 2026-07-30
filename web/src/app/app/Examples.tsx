@@ -49,7 +49,7 @@ export const EXAMPLES: Example[] = [
     file: "person.mp4",
     mime: "video/mp4",
     prompt:
-      "Remove the background from person.mp4, put a gradient behind them, and " +
+      "Remove the background from this video, put a gradient behind them, and " +
       "deliver the result as an mp4.",
     icon: Film,
   },
@@ -59,8 +59,8 @@ export const EXAMPLES: Example[] = [
     file: "crowd.mp4",
     mime: "video/mp4",
     prompt:
-      "Count and track the people in crowd.mp4 on a GPU lane, draw boxes with " +
-      "track ids, and deliver an annotated mp4. Tell me how many distinct " +
+      "Count and track the people in this footage on a GPU lane, draw boxes " +
+      "with track ids, and deliver an annotated mp4. Tell me how many distinct " +
       "people you counted.",
     icon: People,
   },
@@ -70,7 +70,7 @@ export const EXAMPLES: Example[] = [
     file: "sensors.csv",
     mime: "text/csv",
     prompt:
-      "Clean sensors.csv on the cheapest CPU lane that can do it: drop " +
+      "Clean this sensor data on the cheapest CPU lane that can do it: drop " +
       "duplicates and rows with a blank reading, lowercase the quality column " +
       "and drop the bad ones, and normalise every timestamp to unix seconds. " +
       "Then compute per-sensor summary statistics from the cleaned file. " +
