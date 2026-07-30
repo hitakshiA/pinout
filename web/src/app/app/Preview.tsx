@@ -86,12 +86,15 @@ export function Preview({
           <div className="ws-preview-name">{asset.name}</div>
           <div className="ws-preview-meta">
             {(asset.contentType ?? "file").split("/").pop()?.toUpperCase()} · {size(asset.bytes)}
-            {" · "}<span className="ws-mono">{asset.sha256.slice(0, 12)}</span>
+            {asset.sha256
+              ? <> · <span className="ws-mono">{asset.sha256.slice(0, 12)}</span></>
+              : <> · not sent yet</>}
           </div>
         </div>
         <span className="ws-top-spacer" />
-        <a className="ws-btn" href={`${url}${url.includes("?") ? "&" : "?"}dl=1`}
-           download>Download</a>
+        <a className="ws-btn" download={asset.name}
+           href={url.startsWith("blob:") ? url
+                 : `${url}${url.includes("?") ? "&" : "?"}dl=1`}>Download</a>
         <button className="ws-icon-btn" onClick={onClose} aria-label="Close preview">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 6 6 18M6 6l12 12" />

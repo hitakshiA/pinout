@@ -70,6 +70,7 @@ export default function Workspace() {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<File[]>([]);
   const [rejected, setRejected] = useState<string[]>([]);
+  const [local, setLocal] = useState<{ asset: Asset; url: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useStickToBottom(blocks.length + (working ? 1 : 0));
@@ -391,6 +392,26 @@ export default function Workspace() {
   const dropFile = (i: number) => {
     setPending((p) => p.filter((_, n) => n !== i));
     setRejected([]);
+    setLocal(null);
+  };
+
+  /**
+   * Preview a file that has not been sent yet.
+   *
+   * It has no asset id and no hash, because nothing has uploaded it, so it is
+   * shown from the browser's own copy. Checking you attached the right video
+   * ought not to require paying an agent to look at it for you.
+   */
+  const openPending = (f: File, url: string) => {
+    setPreview(null);
+    setLocal({
+      url,
+      asset: {
+        id: `local:${f.name}`, name: f.name, bytes: f.size,
+        contentType: f.type || "application/octet-stream", sha256: "",
+      },
+    });
+    setPanelOpen(false);
   };
 
   /**
@@ -408,7 +429,7 @@ export default function Workspace() {
       const fresh = await api.chat(ws.id, ws.cap, chatId).catch(() => null);
       if (fresh) { setChat(fresh); a = find(fresh); }
     }
-    if (a) setPreview(a);
+    if (a) { setLocal(null); setPreview(a); }
     else { setPanelOpen(true); setTab("Files"); }
   };
 
@@ -682,7 +703,8 @@ export default function Workspace() {
                   </button>
                 </div>
               )}
-              <PendingFiles files={pending} onRemove={dropFile} />
+              <PendingFiles files={pending} onRemove={dropFile}
+                            onOpen={openPending} />
               <div className="ws-composer-row">
                 <button className="ws-icon-btn" onClick={() => fileRef.current?.click()} aria-label="Attach">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
@@ -717,11 +739,15 @@ export default function Workspace() {
           {floating && (panelOpen || !sideOpen) && panelOpen && (
             <div className="ws-scrim" onClick={() => setPanelOpen(false)} />
           )}
-          {preview && ws && (
+          {local && (
+            <Preview asset={local.asset} url={local.url}
+                     onClose={() => setLocal(null)} />
+          )}
+          {preview && ws && !local && (
             <Preview asset={preview} url={api.fileUrl(ws.id, ws.cap, preview.id)}
                      onClose={() => setPreview(null)} />
           )}
-          {panelOpen && !preview && (
+          {panelOpen && !preview && !local && (
             <Panel chat={chat} wallet={wallet} tab={tab} setTab={setTab}
                    urlFor={(aid) => (ws ? api.fileUrl(ws.id, ws.cap, aid) : "#")}
                    onFundDirect={money.fundDirect} onFundSigned={money.fundSigned}

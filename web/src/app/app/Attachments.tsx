@@ -57,16 +57,22 @@ export type Attached = {
 
 /** In the composer: what you are about to send, each removable. */
 export function PendingFiles({
-  files, onRemove,
-}: { files: File[]; onRemove: (i: number) => void }) {
+  files, onRemove, onOpen,
+}: {
+  files: File[];
+  onRemove: (i: number) => void;
+  onOpen: (f: File, url: string) => void;
+}) {
   const [urls, setUrls] = useState<string[]>([]);
 
-  // object URLs are revoked together so a fast add/remove cannot leak one
+  // Every file gets a URL, not just the ones with a thumbnail: checking you
+  // picked the right video before paying to process it is the whole point, and
+  // that needs something to point the player at. Revoked together so a fast
+  // add-then-remove cannot leak one.
   useEffect(() => {
-    const made = files.map((f) =>
-      /^(image|video)\//.test(f.type) ? URL.createObjectURL(f) : "");
+    const made = files.map((f) => URL.createObjectURL(f));
     setUrls(made);
-    return () => made.forEach((u) => u && URL.revokeObjectURL(u));
+    return () => made.forEach((u) => URL.revokeObjectURL(u));
   }, [files]);
 
   if (!files.length) return null;
@@ -74,13 +80,18 @@ export function PendingFiles({
     <div className="ws-chips">
       {files.map((f, i) => {
         const kind = kindOf(f.name) ?? "text";
+        const previewable = /^(image|video)\//.test(f.type);
         return (
           <div className="ws-chip" key={`${f.name}-${i}`}>
-            <Thumb kind={kind} src={urls[i] || null} />
-            <span className="ws-chip-body">
-              <span className="ws-chip-name">{f.name}</span>
-              <span className="ws-chip-meta">{fmtBytes(f.size)}</span>
-            </span>
+            <button className="ws-chip-open" title={`Open ${f.name}`}
+                    disabled={!urls[i]}
+                    onClick={() => urls[i] && onOpen(f, urls[i])}>
+              <Thumb kind={kind} src={previewable ? urls[i] || null : null} />
+              <span className="ws-chip-body">
+                <span className="ws-chip-name">{f.name}</span>
+                <span className="ws-chip-meta">{fmtBytes(f.size)}</span>
+              </span>
+            </button>
             <button className="ws-chip-x" onClick={() => onRemove(i)}
                     aria-label={`Remove ${f.name}`}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none"

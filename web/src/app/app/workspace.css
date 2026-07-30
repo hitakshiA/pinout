@@ -646,3 +646,25 @@
 }
 .ws-reject > svg { flex: none; margin-top: 2px; color: var(--ws-warn); }
 .ws-reject > span { flex: 1; min-width: 0; }
+
+/* The chip body is the open affordance; the x sits outside it so removing a
+   file and inspecting it are not the same click. */
+.ws-chip-open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-chip-open:disabled { cursor: default; }
+.ws-chip:has(.ws-chip-open:hover) {
+  border-color: var(--ws-purple);
+  background: color-mix(in oklab, var(--ws-raise) 82%, var(--ws-purple));
+}
