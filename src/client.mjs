@@ -319,6 +319,10 @@ export class PinoutClient {
 
     return {
       sessionId: id, lane, secondsPurchased: s.credits,
+      // the machine's wall clock. Without this the agent is told "undefined"
+      // and plans as if it had forever, which is how a job loses three
+      // machines in a row and pays to redo the same work each time.
+      maxSessionDurationSeconds: s.maxSessionDurationSeconds ?? null,
       get secondsUsed() { return ticks; },
       get paused() { return paused; },
       get topUps() { return topUps; },
