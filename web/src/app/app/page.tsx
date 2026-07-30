@@ -12,6 +12,7 @@ import {
 } from "./Transcript";
 import { Panel } from "./Panel";
 import { Preview } from "./Preview";
+import { Examples, loadSample, type Example } from "./Examples";
 import type { Asset } from "./api";
 
 /**
@@ -386,6 +387,22 @@ export default function Workspace() {
     } finally { setBusy(false); }
   };
 
+  /** Load an example's file, attach it, and put its prompt in the composer. */
+  const pickExample = async (e: Example) => {
+    if (!ws || !chatId) return;
+    setBusy(true);
+    try {
+      const b64 = await loadSample(e.file);
+      await api.attach(ws.id, ws.cap, chatId, e.file, b64);
+      setDraft(e.prompt);
+      await refreshChat();
+      // the file is on the chat now, so the composer should not re-upload it
+      setPending([]);
+    } catch (err) {
+      setBlocks((b) => [...b, { k: "note", id: `x${Date.now()}`, text: String(err), tone: "bad" }]);
+    } finally { setBusy(false); }
+  };
+
   const decide = async (verdict: string, feedback?: string) => {
     if (!ws) return;
     setBusy(true);
@@ -485,11 +502,7 @@ export default function Workspace() {
           <div className="ws-scroll" ref={scrollRef}>
             <div className="ws-col">
               {!blocks.length && !working && (
-                <div className="ws-empty" style={{ paddingTop: 90 }}>
-                  Give the agent a task and attach any files it needs.<br />
-                  It will work out what compute it wants, ask you to fund it, and
-                  return whatever it does not spend.
-                </div>
+                <Examples busy={busy} onPick={pickExample} />
               )}
 
               {blocks.map((b) => {
