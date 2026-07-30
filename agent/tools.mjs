@@ -377,6 +377,18 @@ function machineOr404(sessionId) {
       const life = m._ceiling ?? null;
       const lifeLeft = life != null && age != null ? Math.max(0, life - age) : null;
       const dying = lifeLeft != null && lifeLeft <= Math.max(120, Math.floor(life * 0.2));
+      // Say what has not happened yet.
+      //
+      // A traced run made 48 exec calls on one machine and delivered nothing.
+      // Not one of them processed the input: every single call read frame 0 of
+      // the video and compared segmentation models on it. The agent was not
+      // iterating on a result, it was still choosing an approach, forty-eight
+      // calls in, which is why telling it to stop polishing had no effect.
+      //
+      // A count it cannot argue with lands where instructions do not.
+      const runs = m._execs = (m._execs ?? 0) + 1;
+      const delivered = m._delivered ?? 0;
+
       // Put the price on every call.
       //
       // Being told once that the meter is running does not survive twenty tool
@@ -397,6 +409,18 @@ function machineOr404(sessionId) {
         } : {}),
         ...(spent != null ? {
           spentSoFarHbar: Number((spent / 1e8).toFixed(4)),
+        } : {}),
+        execsOnThisMachine: runs,
+        filesDelivered: delivered,
+        ...(runs >= 6 && delivered === 0 ? {
+          nothingDeliveredYet: true,
+          stopExploring:
+            `${runs} calls on this machine and nothing delivered. Whatever you ` +
+            `are still comparing, pick one and run it over the WHOLE input now, ` +
+            `then deliver_file the result. If a sample looked acceptable, it is ` +
+            `acceptable. A delivered result you would improve later beats a ` +
+            `perfect one nobody receives, and the meter has been running for ` +
+            `all ${runs} of these.`,
         } : {}),
         secondsHeldSoFar: m.secondsUsed,
         secondsRemaining: left,
@@ -630,6 +654,7 @@ function machineOr404(sessionId) {
       const m = machineOr404(a.sessionId);
       const got = await m.download(a.path);
       const buf = Buffer.isBuffer(got) ? got : Buffer.from(got.content ?? got, "base64");
+      m._delivered = (m._delivered ?? 0) + 1;
       const art = assets.deliver({
         name: a.name ?? a.path.split("/").pop(),
         bytes: buf,
