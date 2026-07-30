@@ -225,13 +225,16 @@ export class PinoutClient {
   async rent(lane = "cpu-small", { maxSeconds = 600, autoTopUp = true, onTick } = {}) {
     const s = await this.openComputeSession(lane);
     const id = s.sessionId;
-    let ticks = 0, paused = false, topUps = 0;
+    let ticks = 0, paused = false, topUps = 0, ready = false;
     // Why a top-up last failed, if it did. Without this the failure is
     // invisible and the next exec blocks for its full timeout.
     let starved = null;
     const streamDone = this.stream(id, {
       n: maxSeconds, provider: "compute", hold: true,
-      onEvent: () => { ticks++; onTick?.(ticks); },
+      onEvent: (e) => {
+        if (e?.ready) { ready = true; return; }   // up, and not a billed second
+        ticks++; onTick?.(ticks);
+      },
       onPaused: async () => {
         paused = true;
         // The cap used to be 5. That was right when every top-up was a
@@ -260,11 +263,18 @@ export class PinoutClient {
       onResumed: () => { paused = false; starved = null; },
     }).catch((e) => ({ error: e }));
 
-    // The machine is not usable until it has actually been provisioned; the
-    // first tick is the signal that it is up.
+    // Wait for the machine to say it is up, not for it to bill.
+    //
+    // This used to wait for the first tick, which worked only because the
+    // meter ran on the wall clock and therefore ticked whether or not any code
+    // was running. Now that the meter follows compute, an idle machine emits
+    // no ticks at all and this waited out its full timeout on a machine that
+    // had been ready for three minutes.
     const upBy = Date.now() + 180_000;
-    while (ticks === 0 && Date.now() < upBy) await new Promise((r) => setTimeout(r, 250));
-    if (ticks === 0) {
+    while (!ready && ticks === 0 && Date.now() < upBy) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!ready && ticks === 0) {
       await this.close(id, "provision-timeout").catch(() => {});
       throw new Error("machine did not come up within 180s");
     }

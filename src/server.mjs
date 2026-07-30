@@ -956,6 +956,15 @@ app.get("/session/:id/stream", (c) => {
           error: ev.error, note: ev.note, creditsRemaining: s.credits }) });
         break;
       }
+      if (ev.ready) {
+        // "the machine is up", which is information, not a second of compute.
+        // It exists because the buyer used to learn this from the first billed
+        // tick, and billing compute rather than custody means an idle machine
+        // never produces one.
+        await stream.writeSSE({ event: "SessionReady",
+          data: JSON.stringify({ ...ev, credits: s.credits, sessionId: s.id }) });
+        continue;   // never billed
+      }
       if (ev.waiting) {
         // Keeps the SSE channel alive while credits are zero. Never billed.
         await stream.writeSSE({ event: "SessionWaiting",

@@ -129,6 +129,21 @@ export const compute = {
       const WAIT_EVERY_MS = Number(env.EXHAUSTION_HEARTBEAT_MS ?? 5_000);
       let pausedAt = null, lastWaitAt = 0;
 
+      // Liveness is not billing.
+      //
+      // The buyer learns the machine is up by receiving its first frame, and
+      // that frame used to be the first billed second because the meter ran on
+      // wall clock. Billing compute instead means an idle machine emits
+      // nothing, so every rent sat waiting for a tick that would never come and
+      // timed out after 180 seconds. Eight rentals in a row, no code ever run.
+      //
+      // So say it explicitly and charge nothing for it.
+      yield {
+        id: "ready", i: -1, unit: "second", lane, fleet: spec.fleet,
+        ready: true, billed: false, coldStartMs, stdout: "",
+        note: "machine is up. the meter runs while your code runs, not while you think.",
+      };
+
       try {
         while (emitted < n && alive) {
           // Always yield, even when nothing is billable.
