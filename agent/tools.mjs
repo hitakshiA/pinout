@@ -276,6 +276,10 @@ function machineOr404(sessionId) {
       const lane = a.lane ?? "cpu-1";
       const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
       rented.set(m.sessionId, m);
+      // the wall clock only matters at the moment work is being done, so it is
+      // recorded here and reported on every exec rather than only at rent time
+      m._rentedAt = Date.now();
+      m._ceiling = m.maxSessionDurationSeconds ?? null;
       onSessionOpen?.(m.sessionId, lane);
       // A machine has a wall clock, and an agent that does not know it plans a
       // job it cannot finish. One ran 31 exec calls across three machines,
@@ -359,12 +363,36 @@ function machineOr404(sessionId) {
       const bought = m.secondsPurchased ?? 0;
       const left = Math.max(0, bought - m.secondsUsed);
       const low = bought > 0 && left <= Math.max(20, Math.floor(bought * 0.25));
+
+      // Two clocks run, and only one of them is about money.
+      //
+      // Credits can be topped up; the machine's lifetime cannot. When it
+      // expires the filesystem goes with it, and an agent told about it only
+      // at rent time has long since stopped thinking about it. A job was
+      // watched losing three machines this way, re-staging and redoing work it
+      // had already paid for, because nothing warned it at the moment it was
+      // still able to act.
+      const age = m._rentedAt ? Math.floor((Date.now() - m._rentedAt) / 1000) : null;
+      const life = m._ceiling ?? null;
+      const lifeLeft = life != null && age != null ? Math.max(0, life - age) : null;
+      const dying = lifeLeft != null && lifeLeft <= Math.max(120, Math.floor(life * 0.2));
       return {
         exitCode: r.exitCode, ms: r.ms,
         ...clipOutput(r.stdout ?? ""),
         stderr: (r.stderr ?? "").slice(0, 4000),
         secondsHeldSoFar: m.secondsUsed,
         secondsRemaining: left,
+        ...(lifeLeft != null ? { machineLifetimeRemaining: lifeLeft } : {}),
+        ...(dying ? {
+          machineExpiringSoon: true,
+          actNow:
+            `This machine has about ${lifeLeft}s of life left, and topping up ` +
+            `credits will not extend it. Deliver whatever is usable NOW with ` +
+            `deliver_file. Anything still only on the filesystem is lost when ` +
+            `it goes, and you will pay to produce it again. If the job needs ` +
+            `more time, deliver, release, rent a fresh machine and stage your ` +
+            `delivered file back onto it to carry on from where you stopped.`,
+        } : {}),
         ...(low ? {
           runningLow: true,
           warning:
