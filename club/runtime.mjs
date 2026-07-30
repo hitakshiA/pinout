@@ -622,13 +622,40 @@ async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
   })();
 
   // Tool calls stream out as they happen so the UI shows work, not a spinner.
+  //
+  // getToolCallsStream only covers the first round. A trace of a real job
+  // showed calls at 3s and then nothing, while results kept arriving at 41s,
+  // 61s, 165s, 220s: the agent was working the whole time and the UI had
+  // stopped being told. Sixteen minutes of that reads as a hang, and I twice
+  // diagnosed it as one.
+  //
+  // So calls are taken from the items stream, which carries every round, and
+  // deduped by id against whatever the first stream already reported.
+  const announced = new Set();
+  const announce = (id, name, args) => {
+    const key = id ?? `${name}:${announced.size}`;
+    if (announced.has(key)) return;
+    announced.add(key);
+    run.say("tool", { name, args: JSON.stringify(args ?? {}).slice(0, 600) });
+  };
+
   (async () => {
     try {
       for await (const c of result.getToolCallsStream()) {
-        run.say("tool", {
-          name: c.name,
-          args: JSON.stringify(c.arguments ?? c.input ?? {}).slice(0, 600),
-        });
+        announce(c.callId ?? c.id, c.name, c.arguments ?? c.input);
+      }
+    } catch { /* stream ends with the turn */ }
+  })();
+
+  (async () => {
+    try {
+      for await (const item of result.getItemsStream()) {
+        if (item?.type !== "function_call") continue;
+        const name = item.name ?? item.function?.name;
+        if (!name) continue;
+        let args = item.arguments ?? item.input;
+        if (typeof args === "string") { try { args = JSON.parse(args); } catch { /* leave it */ } }
+        announce(item.callId ?? item.call_id ?? item.id, name, args);
       }
     } catch { /* stream ends with the turn */ }
   })();
