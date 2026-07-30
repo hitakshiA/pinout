@@ -109,6 +109,10 @@ How to work:
    If you cleaned a file in step one, stage that cleaned file in step two
    rather than the raw one.
 
+   To understand a file rather than just move it: look_at for images and
+   video, read_document for PDFs, office documents, spreadsheets and audio,
+   which it transcribes. Reach for those before writing your own parser.
+
    A machine has a lifetime, and rent_machine tells you what it is. Plan inside
    it. If the work will not fit, do not push on and hope: deliver what you have
    with deliver_file, release the machine, and rent another. What you delivered
@@ -465,6 +469,20 @@ function buildTools(run) {
       // A bare number invites the agent to guess whether it is a lot. Say what
       // it buys on the lane it is actually renting.
       const rate = run.currentLaneRate ?? null;
+
+      // The balance alone cannot answer "what has this chat cost me", which is
+      // the question the human actually asks at the end, and the agent was
+      // reconstructing the answer from its own memory of the turn. The chat
+      // ledger already holds every movement, so roll it up here rather than
+      // making the agent add up things it might have compacted away.
+      const ledger = threads.get(run.threadId)?.ledger ?? [];
+      const sum = (...kinds) => ledger
+        .filter((e) => kinds.includes(e.kind))
+        .reduce((n, e) => n + e.tinybar, 0);
+      const funded = sum("wallet_opened", "funded");
+      const spent = sum("payment", "anchor");
+      const refunded = sum("refund");
+
       return {
         accountId: w.accountId,
         tinybar,
@@ -474,6 +492,14 @@ function buildTools(run) {
           onLane: run.currentLane,
         } : {}),
         low: rate ? tinybar < rate * 60 : tinybar < 20_000_000,
+        thisChat: {
+          fundedHbar: Number((funded / 1e8).toFixed(4)),
+          spentHbar: Number((spent / 1e8).toFixed(4)),
+          refundedHbar: Number((refunded / 1e8).toFixed(4)),
+          netHbar: Number(((spent - refunded) / 1e8).toFixed(4)),
+          movements: ledger.length,
+          note: "the whole money history of this chat, ready to report to the human",
+        },
       };
     },
   });
@@ -498,7 +524,10 @@ function buildTools(run) {
       const made = assets.artifactsOf(run.workspaceId, run.threadId);
       const shape = (a, made) => ({
         name: a.name, bytes: a.bytes, contentType: a.contentType,
-        sha256: a.sha256.slice(0, 16), needsChunking: a.needsChunking,
+        sha256: a.sha256.slice(0, 16),
+        ...(a.needsChunking
+          ? { large: "over 32 MB; stage_input splits and rejoins it for you" }
+          : {}),
         source: made ? "you made this earlier" : "the human attached this",
         ...(a.description ? { description: a.description } : {}),
       });
@@ -563,6 +592,15 @@ function buildTools(run) {
       }
     },
     onSessionClose: (id) => run.openSessions.delete(id),
+    // The chat ledger recorded money coming in and never money going out, so
+    // the panel's bill showed a funded wallet next to no purchases and the
+    // agent had to reconstruct the total from its own memory of the turn.
+    onMoney: ({ kind, tinybar, tx = null, hashscan = null }) => {
+      const link = hashscan ?? (tx ? hashscanTx(tx) : null);
+      const entry = { kind, tinybar, txId: tx, ...(link ? { hashscan: link } : {}) };
+      threads.addLedgerEntry(run.threadId, entry);
+      run.say("money", entry);
+    },
     maxPerCallTinybar: Math.min(run.ceilingTinybar, 2_000_000_000),
     budgetTinybar: run.ceilingTinybar,
   });

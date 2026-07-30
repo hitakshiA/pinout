@@ -48,7 +48,7 @@ function clipOutput(text, limit = 6000) {
  */
 export function pinoutTools({
   base = env.PINOUT_URL ?? "http://localhost:4021",
-  accountId, privateKey, getWallet, assets, onSessionOpen, onSessionClose,
+  accountId, privateKey, getWallet, assets, onSessionOpen, onSessionClose, onMoney,
   maxPerCallTinybar = 5_000_000,
   budgetTinybar = 100_000_000,
 } = {}) {
@@ -72,6 +72,7 @@ export function pinoutTools({
     client = new PinoutClient({
       base, accountId: w?.accountId ?? accountId, privateKey: w?.privateKey ?? privateKey,
       maxPerCallTinybar, budgetTinybar,
+      onPayment: (p) => onMoney?.({ kind: "payment", ...p }),
     });
     return client;
   }
@@ -170,6 +171,14 @@ export function pinoutTools({
     execute: async (a) => {
       const r = await pinout().close(a.sessionId, a.cause);
       onSessionClose?.(a.sessionId);
+      const refunded = Number(r.refundAmount ?? 0);
+      if (refunded > 0) {
+        onMoney?.({ kind: "refund", tinybar: refunded, hashscan: r.refundTxUrl ?? null });
+      }
+      const anchor = Number(r.settlementFeeTinybar ?? 0);
+      if (anchor > 0) {
+        onMoney?.({ kind: "anchor", tinybar: anchor, hashscan: r.settlementTxUrl ?? null });
+      }
       return {
         consumed: money(r.consumedAmount),
         refund: money(r.refundAmount),
@@ -518,6 +527,10 @@ function machineOr404(sessionId) {
       const m = machineOr404(a.sessionId);
       const out = await m.release(a.cause ?? "work-finished");
       onSessionClose?.(a.sessionId);
+      const back = Number(out.refundAmount ?? 0);
+      if (back > 0) {
+        onMoney?.({ kind: "refund", tinybar: back, hashscan: out.refundTxUrl ?? null });
+      }
       rented.delete(a.sessionId);
       return {
         secondsHeld: m.secondsUsed,
@@ -618,16 +631,69 @@ function machineOr404(sessionId) {
           available: assets.list().map((x) => x.name),
         };
       }
-      if (asset.needsChunking) {
-        return {
-          error: `${a.name} is ${asset.bytes} bytes, over the ${32 * 1024 * 1024} byte ` +
-                 `single-upload cap. Split it or process it in parts.`,
-        };
-      }
       const buf = assets.read(asset.id);
       const m = machineOr404(a.sessionId);
-      const r = await m.upload(a.destPath, buf);
-      return { ...r, stagedBytes: buf.length, sha256: asset.sha256, path: a.destPath };
+
+      // Big files go in pieces and are joined on the machine.
+      //
+      // The single-upload cap is 32 MiB. The asset store accepts 512 MB, so a
+      // 200 MB video was accepted, listed, and then refused at the machine with
+      // a message telling the agent to split it, which it had no tool to do.
+      // Accepting a file and then having no way to use it is worse than
+      // refusing it, so the chunking happens here rather than being someone
+      // else's problem.
+      const CAP = 32 * 1024 * 1024;
+      if (buf.length <= CAP) {
+        const r = await m.upload(a.destPath, buf);
+        return { ...r, stagedBytes: buf.length, sha256: asset.sha256, path: a.destPath };
+      }
+
+      const parts = Math.ceil(buf.length / CAP);
+      for (let i = 0; i < parts; i++) {
+        await m.upload(`${a.destPath}.part${i}`, buf.subarray(i * CAP, (i + 1) * CAP));
+      }
+      // join, verify against the hash we hold, and clean up the pieces
+      const join = await m.exec(
+        `import hashlib, os
+` +
+        `parts = ${parts}
+` +
+        `dest = ${JSON.stringify(a.destPath)}
+` +
+        `h = hashlib.sha256()
+` +
+        `with open(dest, "wb") as out:
+` +
+        `    for i in range(parts):
+` +
+        `        p = f"{dest}.part{i}"
+` +
+        `        with open(p, "rb") as f:
+` +
+        `            while True:
+` +
+        `                b = f.read(1 << 20)
+` +
+        `                if not b: break
+` +
+        `                out.write(b); h.update(b)
+` +
+        `        os.remove(p)
+` +
+        `print(h.hexdigest())
+`
+      );
+      const got = (join.stdout ?? "").trim().split("\n").pop();
+      if (got !== asset.sha256) {
+        return {
+          error: `staged ${a.name} in ${parts} parts but the joined file does not match: ` +
+                 `expected ${asset.sha256.slice(0, 16)}, got ${String(got).slice(0, 16)}`,
+        };
+      }
+      return {
+        ok: true, stagedBytes: buf.length, parts, sha256: asset.sha256, path: a.destPath,
+        note: `staged in ${parts} pieces and rejoined on the machine; the hash matches`,
+      };
     },
   });
 
@@ -699,7 +765,106 @@ function machineOr404(sessionId) {
     },
   });
 
+  /**
+   * Read a document, spreadsheet or recording well enough to work with it.
+   *
+   * look_at handles pixels. Everything else was reachable only by the agent
+   * writing its own extraction code, which meant guessing at a library and
+   * usually picking the slow one. The choices here are the ones the benchmarks
+   * support: PyMuPDF for PDF text because it is roughly ten times faster than
+   * pdfplumber, MarkItDown for office formats because it covers the long tail
+   * cheaply, and faster-whisper for audio because CTranslate2 with int8 is the
+   * clear winner on a GPU, which is what this machine already is.
+   *
+   * It runs on the rented machine rather than the server: the dependencies are
+   * heavy, the buyer is already paying for compute, and a document worth
+   * reading is usually one they want processed anyway.
+   */
+  const read_document = tool({
+    name: "read_document",
+    description:
+      "Extract the text and structure of a file on a machine you are renting: " +
+      "PDF, Word, PowerPoint, Excel, HTML, EPUB, or an audio recording, which " +
+      "is transcribed. Use this instead of writing your own parser. For images " +
+      "and video use look_at.",
+    inputSchema: z.object({
+      sessionId: z.string(),
+      path: z.string().describe("absolute path on the machine, e.g. /work/report.pdf"),
+      maxChars: z.number().optional().describe("how much to return, default 24000"),
+    }),
+    execute: async (a) => {
+      const m = machineOr404(a.sessionId);
+      const cap = a.maxChars ?? 24_000;
+      const code = `
+import os, sys, subprocess, json
+p = ${JSON.stringify(a.path)}
+cap = ${cap}
+ext = os.path.splitext(p)[1].lower()
+
+def pip(*pkgs):
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *pkgs],
+                   capture_output=True)
+
+out = {"path": p, "ext": ext}
+try:
+    if ext == ".pdf":
+        try: import fitz
+        except ImportError:
+            pip("pymupdf"); import fitz
+        d = fitz.open(p)
+        out["pages"] = d.page_count
+        text = []
+        for i, page in enumerate(d):
+            text.append(f"--- page {i+1} ---")
+            text.append(page.get_text())
+            if sum(len(t) for t in text) > cap: 
+                out["truncatedAtPage"] = i + 1
+                break
+        out["text"] = "\\n".join(text)[:cap]
+    elif ext in (".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".opus"):
+        try: from faster_whisper import WhisperModel
+        except ImportError:
+            pip("faster-whisper"); from faster_whisper import WhisperModel
+        import torch
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        model = WhisperModel("base", device=dev, compute_type="int8")
+        segs, info = model.transcribe(p)
+        out["language"] = info.language
+        out["durationSeconds"] = round(info.duration, 1)
+        out["device"] = dev
+        parts = []
+        for s in segs:
+            parts.append(f"[{s.start:.1f}s] {s.text.strip()}")
+            if sum(len(x) for x in parts) > cap: break
+        out["text"] = "\\n".join(parts)[:cap]
+    else:
+        try: from markitdown import MarkItDown
+        except ImportError:
+            pip("markitdown[all]"); from markitdown import MarkItDown
+        r = MarkItDown().convert(p)
+        out["text"] = (r.text_content or "")[:cap]
+        if r.title: out["title"] = r.title
+    out["chars"] = len(out.get("text", ""))
+except Exception as e:
+    out["error"] = f"{type(e).__name__}: {e}"
+print("<<<DOC>>>" + json.dumps(out))
+`;
+      const r = await m.exec(code);
+      const raw = (r.stdout ?? "");
+      const i = raw.lastIndexOf("<<<DOC>>>");
+      if (i === -1) {
+        return { error: "extraction produced no result", stderr: (r.stderr ?? "").slice(0, 800) };
+      }
+      try {
+        const parsed = JSON.parse(raw.slice(i + 9));
+        return { ...parsed, ms: r.ms };
+      } catch {
+        return { error: "could not parse the extraction result", raw: raw.slice(-600) };
+      }
+    },
+  });
+
   return [discover, open_session, rent_machine, exec, upload_file, download_file, list_files,
-          stage_input, deliver_file, look_at,
+          stage_input, deliver_file, look_at, read_document,
           release_machine, run_compute, top_up, stream, close_session, verify_session, spend_report];
 }

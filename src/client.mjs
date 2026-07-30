@@ -24,12 +24,14 @@ export class UntrustedPaymentError extends Error {}
 const MAX_AUTO_TOPUPS = Number(process.env.MAX_AUTO_TOPUPS ?? 60);
 
 export class PinoutClient {
-  constructor({ base, accountId, privateKey, maxPerCallTinybar = 5_000_000, budgetTinybar = 50_000_000 }) {
+  constructor({ base, accountId, privateKey, maxPerCallTinybar = 5_000_000, budgetTinybar = 50_000_000,
+               onPayment = null }) {
     this.base = base.replace(/\/$/, "");
     this.accountId = accountId ?? env.HEDERA_ACCOUNT_ID;
     this.maxPerCall = maxPerCallTinybar;
     this.budget = budgetTinybar;
     this.spent = 0;
+    this.onPayment = onPayment;
     this.secrets = new Map();    // sessionId -> bearer secret, issued once at mint
     this.thresholds = new Map(); // sessionId -> remaining units at which to top up
     this.lanes = new Map();      // sessionId -> compute lane, so top-ups price correctly
@@ -143,10 +145,15 @@ export class PinoutClient {
     this.spent += amount;
 
     const pr = res.headers.get("PAYMENT-RESPONSE");
-    return {
-      paid: true, res, body, spent: this.spent,
-      settlement: pr ? decodePaymentResponseHeader(pr) : null,
-    };
+    const settlement = pr ? decodePaymentResponseHeader(pr) : null;
+    // Every x402 payment this client makes passes through here, which makes it
+    // the only place worth reporting from. Hooking the individual tools instead
+    // would miss whichever one is added next.
+    this.onPayment?.({
+      tinybar: amount, path, tx: settlement?.transaction ?? null,
+      settled: Boolean(settlement?.success),
+    });
+    return { paid: true, res, body, spent: this.spent, settlement };
   }
 
   /**
