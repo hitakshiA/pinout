@@ -18,7 +18,9 @@ git config --global --add safe.directory /home/pinout/pinout
 sudo -u pinout git fetch -q origin main
 sudo -u pinout git reset -q --hard origin/main
 cd web
-echo 'NEXT_PUBLIC_CLUB_URL=https://api.pinout.club' > .env.production
+# The Reown project id is a public client identifier: it ships in the browser
+# bundle by design, so it lives here rather than in a secret store.
+printf 'NEXT_PUBLIC_CLUB_URL=https://api.pinout.club\nNEXT_PUBLIC_REOWN_PROJECT_ID=07f23707cda5bb0dc391a1dfddd7095e\n' > .env.production
 chown pinout:pinout .env.production
 sudo -u pinout npm install --no-audit --no-fund 2>&1 | tail -2
 sudo -u pinout npx next build 2>&1 | tail -4

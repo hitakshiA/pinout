@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import * as walletKit from "./wallet";
 import { hbar, type Asset, type Chat, type LedgerEntry, type Wallet } from "./api";
 
 /**
@@ -57,6 +58,118 @@ function Ledger({ rows }: { rows: LedgerEntry[] }) {
   );
 }
 
+/**
+ * Connect a wallet and send from it.
+ *
+ * Two states and one button each: not connected, so connect; connected, so
+ * send. The account is shown once it is known, because "which of my accounts
+ * is this about to spend from" is the question a send button has to answer
+ * before it is pressed.
+ */
+function Connect({
+  tinybar, busy, to, onSent, manual, setManual,
+}: {
+  tinybar: number; busy: boolean; to: string | null;
+  onSent: (from: string, tinybar: number) => void;
+  manual: string; setManual: (s: string) => void;
+}) {
+  const [acct, setAcct] = useState<string | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const enabled = walletKit.walletAvailable();
+
+  useEffect(() => { if (enabled) setAcct(walletKit.account()); }, [enabled]);
+
+  // Without a project id there is no relay to reach, so say that plainly
+  // instead of showing a connect button that opens nothing.
+  if (!enabled) {
+    return (
+      <>
+        <label className="ws-label">Your Hedera account</label>
+        <input className="ws-field" placeholder="0.0.12345" value={manual}
+               onChange={(e) => setManual(e.target.value)} />
+        <div className="ws-balance-sub" style={{ marginTop: 8 }}>
+          Wallet connect is not configured on this deployment. Send the HBAR from
+          your own wallet, then confirm here so it can be verified on the mirror node.
+        </div>
+        <button className="ws-btn ws-btn-primary" style={{ marginTop: 11, width: "100%" }}
+                disabled={busy || !manual.trim() || !(tinybar > 0)}
+                onClick={() => onSent(manual.trim(), tinybar)}>
+          I have sent it, confirm
+        </button>
+      </>
+    );
+  }
+
+  const go = async () => {
+    setErr(null);
+    try {
+      if (!acct) {
+        setWorking("Opening your wallet…");
+        const a = await walletKit.connect();
+        setAcct(a);
+        return;
+      }
+      // The first funding has nowhere to send yet: opening the account is what
+      // creates the address, and it binds the chat to this wallet so the
+      // balance can only ever come back here. Every later top-up is a real
+      // signed transfer to that address.
+      if (!to) {
+        setWorking("Opening the agent's wallet…");
+        onSent(acct, tinybar);
+        return;
+      }
+      setWorking("Approve the transfer in your wallet…");
+      await walletKit.sendHbar(acct, to, tinybar);
+      setWorking("Confirming on the network…");
+      onSent(acct, tinybar);
+      setErr(null);
+    } catch (e) {
+      const m = String((e as Error)?.message ?? e);
+      setErr(/reject|denied|cancel/i.test(m) ? "You declined it in your wallet." : m);
+    } finally { setWorking(null); }
+  };
+
+  return (
+    <>
+      {acct ? (
+        <div className="ws-connected">
+          <span className="ws-dot" />
+          <span className="ws-mono">{acct}</span>
+          <span className="ws-top-spacer" style={{ flex: 1 }} />
+          <button className="ws-link" onClick={async () => {
+            await walletKit.disconnect().catch(() => {});
+            setAcct(null);
+          }}>Disconnect</button>
+        </div>
+      ) : (
+        <div className="ws-balance-sub" style={{ marginTop: 8 }}>
+          Connect HashPack, Kabila or any WalletConnect wallet. You approve every
+          transfer in the wallet itself; this page never sees your key.
+        </div>
+      )}
+
+      <button className="ws-btn ws-btn-primary" style={{ marginTop: 11, width: "100%" }}
+              disabled={busy || Boolean(working) || (Boolean(acct) && !(tinybar > 0))}
+              onClick={go}>
+        {working ?? (!acct ? "Connect wallet"
+          : to ? `Send ${hbar(tinybar)} from your wallet`
+          : `Open the agent's wallet with ${hbar(tinybar)}`)}
+      </button>
+
+      {err && <div className="ws-shortfall" style={{ marginTop: 9 }}>{err}</div>}
+      {acct && (
+        <div className="ws-balance-sub" style={{ marginTop: 8 }}>
+          {to
+            ? "You approve the transfer in your wallet. "
+            : "This binds the chat to your account. "}
+          The balance can only ever be returned to the account it came from.
+        </div>
+      )}
+    </>
+  );
+}
+
 function Money({
   wallet, onFundDirect, onFundSigned, onWithdraw, busy, needs,
 }: {
@@ -73,6 +186,7 @@ function Money({
   const [mode, setMode] = useState<"wallet" | "direct">("wallet");
 
   const tinybar = Math.round(parseFloat(amount || "0") * 1e8);
+  const accountId = wallet?.accountId ?? null;
 
   return (
     <div>
@@ -112,20 +226,8 @@ function Money({
              onChange={(e) => setAmount(e.target.value)} />
 
       {mode === "wallet" ? (
-        <>
-          <label className="ws-label">Your Hedera account</label>
-          <input className="ws-field" placeholder="0.0.12345" value={from}
-                 onChange={(e) => setFrom(e.target.value)} />
-          <div className="ws-balance-sub" style={{ marginTop: 8 }}>
-            Sign the transfer in your wallet, then confirm here. The balance can only
-            ever be returned to the account it came from.
-          </div>
-          <button className="ws-btn ws-btn-primary" style={{ marginTop: 11, width: "100%" }}
-                  disabled={busy || !from.trim() || !(tinybar > 0)}
-                  onClick={() => onFundSigned(from.trim(), tinybar)}>
-            I have sent it, confirm
-          </button>
-        </>
+        <Connect tinybar={tinybar} busy={busy} to={accountId}
+                 onSent={onFundSigned} manual={from} setManual={setFrom} />
       ) : (
         <>
           <div className="ws-balance-sub" style={{ marginTop: 8 }}>

@@ -693,3 +693,23 @@
   background: color-mix(in oklab, var(--ws-purple) 26%, transparent);
 }
 .ws-fileref > svg { opacity: .8; flex: none; }
+
+/* Connected wallet: the account, and a way out of it. */
+.ws-connected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--ws-line);
+  border-radius: 10px;
+  background: var(--ws-raise);
+  font-size: 12.5px;
+}
+.ws-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #46c08a;
+  box-shadow: 0 0 0 3px color-mix(in oklab, #46c08a 22%, transparent);
+  flex: none;
+}
