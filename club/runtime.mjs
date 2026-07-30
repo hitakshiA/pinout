@@ -16,7 +16,7 @@
 // Rejecting hands the model an error it can re-plan from, which is why "change
 // the plan" is the same mechanism as "no" and not a third code path.
 import { EventEmitter } from "node:events";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   OpenRouter, tool, serializeConversationState, deserializeConversationState,
@@ -639,11 +639,27 @@ async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
   //
   // So calls are taken from the items stream, which carries every round, and
   // deduped by id against whatever the first stream already reported.
-  const announced = new Set();
+  const announced = new Map();
   const announce = (id, name, args) => {
     const key = id ?? `${name}:${announced.size}`;
-    if (announced.has(key)) return;
-    announced.add(key);
+    const hasArgs = args && Object.keys(args).length > 0;
+    // Two streams report the same call and only one of them carries the
+    // arguments. First-wins meant the empty copy usually won, so a trace of a
+    // failing run recorded twenty-eight calls and not one line of what any of
+    // them actually ran. Let a call with arguments replace one without.
+    if (announced.has(key) && !(hasArgs && announced.get(key) === false)) return;
+    announced.set(key, !!hasArgs);
+    // Keep the full call on disk. The event carries a truncated copy for the
+    // UI, which is right for a transcript and useless for working out why a
+    // run went wrong: the interesting part of an exec is always past 600
+    // characters.
+    if (env.CLUB_TRACE) {
+      try {
+        appendFileSync(join(DIR, `trace-${run.threadId}.log`),
+          `\n=== ${new Date().toISOString()} ${name} ===\n` +
+          (typeof args === "string" ? args : JSON.stringify(args, null, 2)) + "\n");
+      } catch { /* tracing must never break a run */ }
+    }
     run.say("tool", { name, args: JSON.stringify(args ?? {}).slice(0, 600) });
   };
 
