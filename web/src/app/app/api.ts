@@ -117,7 +117,7 @@ export type ChatSummary = {
 
 export type Asset = {
   id: string; name: string; bytes: number; contentType: string;
-  sha256: string; description?: string | null;
+  sha256: string; description?: string | null; createdAt?: number;
 };
 
 export type Turn = {

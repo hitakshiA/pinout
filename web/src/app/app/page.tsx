@@ -13,6 +13,8 @@ import {
 import { Panel } from "./Panel";
 import { Preview } from "./Preview";
 import { Examples, loadSample, type Example } from "./Examples";
+import { PendingFiles, SentFiles, type Attached } from "./Attachments";
+import { ACCEPT, checkFile } from "./files";
 import type { Asset } from "./api";
 
 /**
@@ -25,7 +27,7 @@ import type { Asset } from "./api";
  */
 
 type Block =
-  | { k: "user"; id: string; text: string }
+  | { k: "user"; id: string; text: string; files?: Attached[] }
   | { k: "agent"; id: string; text: string; tools: ToolMark[]; streaming?: boolean }
   | { k: "ask"; id: string; ev: RunEvent }
   | { k: "artifact"; id: string; name: string; bytes: number; kind: string }
@@ -67,6 +69,7 @@ export default function Workspace() {
 
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<File[]>([]);
+  const [rejected, setRejected] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useStickToBottom(blocks.length + (working ? 1 : 0));
 
@@ -125,8 +128,22 @@ export default function Workspace() {
       setChat(c);
       setWallet(await api.wallet(ws.id, ws.cap, chatId).catch(() => null));
       const seed: Block[] = [];
+      const placed = new Set<string>();
       for (const t of c.turns) {
-        if (t.role === "user") seed.push({ k: "user", id: t.id, text: t.text ?? "" });
+        if (t.role === "user") {
+          // An upload is recorded moments before the turn that carried it, so
+          // a reload can put it back by finding the first user turn after it.
+          const mine = (c.assets ?? []).filter(
+            (a) => a.createdAt != null && a.createdAt <= t.at && !placed.has(a.id));
+          mine.forEach((a) => placed.add(a.id));
+          seed.push({
+            k: "user", id: t.id, text: t.text ?? "",
+            files: mine.map((a) => ({
+              name: a.name, bytes: a.bytes,
+              src: api.fileUrl(ws.id, ws.cap, a.id),
+            })),
+          });
+        }
         else if (t.role === "assistant") seed.push({ k: "agent", id: t.id, text: t.text ?? "", tools: [] });
         else if (t.role === "tool" && t.text) {
           // a reload used to lose every tool line; the turns hold them
@@ -340,10 +357,56 @@ export default function Workspace() {
 
   /* ---------- actions ---------- */
 
+  /**
+   * Take files, but only ones the agent can actually open.
+   *
+   * Refusing here is much cheaper than refusing later: an unsupported file
+   * that gets through is discovered on a rented machine, after the human has
+   * paid to rent it, by an agent that can only report failure.
+   */
+  const addFiles = (picked: File[]) => {
+    const ok: File[] = [];
+    const bad: string[] = [];
+    for (const f of picked) {
+      const why = checkFile(f);
+      if (why) bad.push(why); else ok.push(f);
+    }
+    if (ok.length) setPending((p) => [...p, ...ok]);
+    // The complaint belongs next to the thing complained about. Put it in the
+    // transcript and it competes with the agent's own output, and the chat
+    // reload that replaces the block list can wipe it before it is read.
+    setRejected(bad);
+  };
+
+  const dropFile = (i: number) => {
+    setPending((p) => p.filter((_, n) => n !== i));
+    setRejected([]);
+  };
+
+  /**
+   * Open a file by name, whether the agent made it or the human attached it.
+   *
+   * The block only carries a name, and the chat state it would be looked up in
+   * can be a moment behind the event that announced it, so a miss re-reads
+   * before giving up and showing the file list instead.
+   */
+  const openByName = async (name: string) => {
+    const find = (c: Chat | null) =>
+      c?.artifacts.find((x) => x.name === name) ?? c?.assets.find((x) => x.name === name);
+    let a = find(chat);
+    if (!a && ws && chatId) {
+      const fresh = await api.chat(ws.id, ws.cap, chatId).catch(() => null);
+      if (fresh) { setChat(fresh); a = find(fresh); }
+    }
+    if (a) setPreview(a);
+    else { setPanelOpen(true); setTab("Files"); }
+  };
+
   const send = async () => {
     if (!ws || !chatId || (!draft.trim() && !pending.length) || busy || running) return;
     setBusy(true);
     try {
+      const sent: Attached[] = [];
       for (const f of pending) {
         const b64 = await new Promise<string>((res, rej) => {
           const r = new FileReader();
@@ -351,11 +414,17 @@ export default function Workspace() {
           r.onerror = rej;
           r.readAsDataURL(f);
         });
-        await api.attach(ws.id, ws.cap, chatId, f.name, b64);
+        const a = await api.attach(ws.id, ws.cap, chatId, f.name, b64);
+        sent.push({
+          name: f.name, bytes: f.size,
+          src: a?.id ? api.fileUrl(ws.id, ws.cap, a.id) : null,
+        });
       }
+      // the panel used to wait for the whole run before showing the upload
+      if (sent.length) refreshChat();
       const task = draft.trim();
-      setBlocks((b) => [...b, { k: "user", id: `u${Date.now()}`, text: task }]);
-      setDraft(""); setPending([]);
+      setBlocks((b) => [...b, { k: "user", id: `u${Date.now()}`, text: task, files: sent }]);
+      setDraft(""); setPending([]); setRejected([]);
       setWorking({ what: "Thinking", since: Date.now() });
       setRunning(true);
       // a generous ceiling; the agent asks for what it needs inside it
@@ -507,7 +576,14 @@ export default function Workspace() {
 
               {blocks.map((b) => {
                 if (b.k === "user") {
-                  return <div className="ws-turn ws-in" key={b.id}><div className="ws-user">{b.text}</div></div>;
+                  return (
+                    <div className="ws-turn ws-in" key={b.id}>
+                      {b.files?.length ? (
+                        <SentFiles files={b.files} onOpen={(n) => openByName(n)} />
+                      ) : null}
+                      {b.text && <div className="ws-user">{b.text}</div>}
+                    </div>
+                  );
                 }
                 if (b.k === "agent") {
                   return (
@@ -547,21 +623,8 @@ export default function Workspace() {
                                       // artifact appears in the transcript the
                                       // moment it is delivered, and looking it
                                       // up in stale state silently did nothing
-                                      // but flip to the file list. Re-read, then
-                                      // fall back to a fetch by name.
-                                      let a = chat?.artifacts.find((x) => x.name === b.name)
-                                           ?? chat?.assets.find((x) => x.name === b.name);
-                                      if (!a && ws && chatId) {
-                                        const fresh = await api.chat(ws.id, ws.cap, chatId)
-                                          .catch(() => null);
-                                        if (fresh) {
-                                          setChat(fresh);
-                                          a = fresh.artifacts.find((x) => x.name === b.name)
-                                           ?? fresh.assets.find((x) => x.name === b.name);
-                                        }
-                                      }
-                                      if (a) setPreview(a);
-                                      else { setPanelOpen(true); setTab("Files"); }
+                                      // but flip to the file list.
+                                      await openByName(b.name);
                                     }} />
                     </div>
                   );
@@ -594,17 +657,31 @@ export default function Workspace() {
                 }}
                 disabled={running}
               />
+              {rejected.length > 0 && (
+                <div className="ws-reject" role="alert">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16.5v.01" />
+                  </svg>
+                  <span>{rejected.join(" ")}</span>
+                  <button className="ws-chip-x" onClick={() => setRejected([])}
+                          aria-label="Dismiss">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" strokeWidth="2.4">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              <PendingFiles files={pending} onRemove={dropFile} />
               <div className="ws-composer-row">
                 <button className="ws-icon-btn" onClick={() => fileRef.current?.click()} aria-label="Attach">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
                     <path d="M12 5v14M5 12h14" />
                   </svg>
                 </button>
-                <input ref={fileRef} type="file" multiple hidden
-                       onChange={(e) => setPending([...(e.target.files ?? [])])} />
-                {pending.length > 0 && (
-                  <span className="ws-balance-sub">{pending.map((f) => f.name).join(", ")}</span>
-                )}
+                <input ref={fileRef} type="file" multiple hidden accept={ACCEPT}
+                       onChange={(e) => { addFiles([...(e.target.files ?? [])]); e.target.value = ""; }} />
                 <span className="ws-top-spacer" />
                 {running ? (
                   <button className="ws-send ws-stop" onClick={stopRun} aria-label="Stop">

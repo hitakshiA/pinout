@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Asset } from "./api";
+import { kindOf, fmtBytes } from "./files";
 
 /**
  * Look at what the agent made, without leaving the transcript.
@@ -13,22 +14,31 @@ import type { Asset } from "./api";
  * than pretending.
  */
 
-const kindOf = (a: Asset) => {
+/* The name decides, not the content type: uploads arrive with whatever the
+   browser guessed, which for a .parquet or a .jsonl is usually nothing. */
+const viewOf = (a: Asset) => {
+  const k = kindOf(a.name);
+  if (k === "image" || k === "video" || k === "audio" || k === "pdf") return k;
+  if (k === "sheet") {
+    // only the delimited ones are readable as text; xlsx and parquet are binary
+    return /\.(csv|tsv)$/i.test(a.name) ? "csv" : "binary";
+  }
+  if (k === "text" || k === "code") return "text";
+  if (k === "doc") return /\.(md|markdown|txt|html?)$/i.test(a.name) ? "text" : "binary";
   const t = a.contentType ?? "";
   if (t.startsWith("video/")) return "video";
   if (t.startsWith("image/")) return "image";
   if (t.startsWith("audio/")) return "audio";
-  if (a.name.toLowerCase().endsWith(".csv") || t === "text/csv") return "csv";
   if (t.startsWith("text/") || t === "application/json") return "text";
-  return "other";
+  return "binary";
 };
 
-const size = (b: number) =>
-  b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.ceil(b / 1024)} KB`;
+const size = fmtBytes;
 
 /** A CSV as a table, because a wall of commas is not a preview. */
 function Csv({ text }: { text: string }) {
-  const rows = text.split("\n").filter(Boolean).slice(0, 200).map((r) => r.split(","));
+  const d = (text.split("\n")[0]?.split("\t").length ?? 1) > 1 ? "\t" : ",";
+  const rows = text.split("\n").filter(Boolean).slice(0, 200).map((r) => r.split(d));
   if (!rows.length) return <div className="ws-empty">Empty file.</div>;
   const [head, ...body] = rows;
   return (
@@ -55,7 +65,7 @@ function Csv({ text }: { text: string }) {
 export function Preview({
   asset, url, onClose,
 }: { asset: Asset; url: string; onClose: () => void }) {
-  const kind = kindOf(asset);
+  const kind = viewOf(asset);
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -80,7 +90,8 @@ export function Preview({
           </div>
         </div>
         <span className="ws-top-spacer" />
-        <a className="ws-btn" href={url} download>Download</a>
+        <a className="ws-btn" href={`${url}${url.includes("?") ? "&" : "?"}dl=1`}
+           download>Download</a>
         <button className="ws-icon-btn" onClick={onClose} aria-label="Close preview">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 6 6 18M6 6l12 12" />
@@ -99,10 +110,13 @@ export function Preview({
         {kind === "text" && (err ? <div className="ws-empty">{err}</div>
           : text == null ? <div className="ws-empty">Loading…</div>
           : <pre className="ws-pre">{text}</pre>)}
-        {kind === "other" && (
+        {kind === "pdf" && (
+          <iframe className="ws-frame" src={url} title={asset.name} />
+        )}
+        {kind === "binary" && (
           <div className="ws-empty">
-            {asset.contentType || "This file"} cannot be shown here.<br />
-            Download it to open it.
+            This file has no on-screen form, but the agent can still read it.<br />
+            Download it to open it in something that can.
           </div>
         )}
       </div>

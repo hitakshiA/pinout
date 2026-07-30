@@ -531,3 +531,118 @@
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 @media (max-width: 620px) { .ws-idea-file { display: none; } }
+
+/* ---------- attachments ----------
+   Files read as objects, not as a line of text. Same chip in the composer and
+   in the transcript, so what you are about to send and what you did send look
+   like the same thing, because they are. */
+.ws-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 2px 2px 9px;
+}
+.ws-chips-sent { padding: 0 0 7px; justify-content: flex-end; }
+
+.ws-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 232px;
+  padding: 6px 9px 6px 6px;
+  border: 1px solid var(--ws-line);
+  border-radius: 11px;
+  background: var(--ws-raise);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: border-color .16s ease, background .16s ease;
+}
+.ws-chips-sent .ws-chip { cursor: pointer; }
+.ws-chips-sent .ws-chip:hover {
+  border-color: var(--ws-purple);
+  background: color-mix(in oklab, var(--ws-raise) 82%, var(--ws-purple));
+}
+
+.ws-chip-thumb {
+  width: 34px; height: 34px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--ws-bg);
+  flex: none;
+}
+.ws-chip-glyph {
+  width: 34px; height: 34px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: color-mix(in oklab, var(--ws-purple) 16%, transparent);
+  color: var(--ws-lav);
+}
+/* a spreadsheet and a video should not read as the same object at a glance */
+.ws-chip-glyph[data-kind="sheet"],
+.ws-chip-glyph[data-kind="code"] {
+  background: color-mix(in oklab, #4ea88a 17%, transparent);
+  color: #7fd3b4;
+}
+.ws-chip-glyph[data-kind="pdf"],
+.ws-chip-glyph[data-kind="doc"] {
+  background: color-mix(in oklab, #d08a52 17%, transparent);
+  color: #e0a878;
+}
+.ws-chip-glyph[data-kind="audio"] {
+  background: color-mix(in oklab, #6f8fe0 17%, transparent);
+  color: #9db4ee;
+}
+
+.ws-chip-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ws-chip-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-chip-meta { font-size: 11px; color: var(--ws-dim); }
+
+.ws-chip-x {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 19px; height: 19px;
+  margin-left: 1px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ws-dim);
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.ws-chip-x:hover { background: var(--ws-line); color: var(--ws-text); }
+
+.ws-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 62vh;
+  border: 1px solid var(--ws-line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+/* A refused file, said where the file was chosen rather than in the
+   transcript, which the agent is already using and a reload can clear. */
+.ws-reject {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 2px 9px;
+  padding: 9px 9px 9px 11px;
+  border: 1px solid color-mix(in oklab, var(--ws-warn) 45%, var(--ws-line));
+  border-radius: 11px;
+  background: color-mix(in oklab, var(--ws-warn) 9%, transparent);
+  color: var(--ws-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ws-reject > svg { flex: none; margin-top: 2px; color: var(--ws-warn); }
+.ws-reject > span { flex: 1; min-width: 0; }

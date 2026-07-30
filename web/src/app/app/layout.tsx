@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./workspace.css";
 
 export const metadata: Metadata = {
-  title: "Pinout workspace",
+  title: "Workspace",
   description: "An agent that rents its own compute and pays for it on Hedera.",
 };
 

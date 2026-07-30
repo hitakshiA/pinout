@@ -273,7 +273,7 @@ app.get("/workspace/:id/chats/:chatId", (c) => {
   const run = rt.runOf(a.w.id);
   const strip = (x) => ({
     id: x.id, name: x.name, bytes: x.bytes, contentType: x.contentType,
-    sha256: x.sha256, description: x.description ?? null,
+    sha256: x.sha256, description: x.description ?? null, createdAt: x.createdAt,
   });
   return c.json({
     ...threads.publicView(t),
@@ -373,7 +373,7 @@ app.get("/workspace/:id/files", (c) => {
   const a = claim(c); if (a.err) return a.err;
   const strip = (x) => ({
     id: x.id, name: x.name, bytes: x.bytes, contentType: x.contentType,
-    sha256: x.sha256, description: x.description ?? null,
+    sha256: x.sha256, description: x.description ?? null, createdAt: x.createdAt,
   });
   return c.json({
     inputs: assets.forWorkspace(a.w.id).map(strip),
@@ -388,11 +388,27 @@ app.get("/workspace/:id/files/:assetId", (c) => {
   // scoped to the workspace: a capability for one must not read another's files
   if (!asset || asset.workspaceId !== a.w.id) return c.json({ error: "no such file" }, 404);
   const buf = assets.read(asset.id);
+
+  // Inline by default so the workspace can show the file.
+  //
+  // Everything was served as an attachment, which images and video ignore but
+  // an iframe obeys, so a PDF preview was a blank white pane: the browser had
+  // quietly started a download instead of rendering. The Download button asks
+  // for ?dl=1 when it actually wants a file on disk.
+  //
+  // HTML and SVG stay attachments whatever is asked. They carry script, and
+  // rendering one inline would run it on the API's own origin.
+  const executable = /html|svg|xml/i.test(asset.contentType ?? "") ||
+                     /\.(html?|svg|xhtml)$/i.test(asset.name);
+  const download = c.req.query("dl") === "1" || executable;
+  const name = asset.name.replace(/["\\\r\n]/g, "");
   return new Response(buf, {
     headers: {
-      "Content-Type": asset.contentType,
+      "Content-Type": asset.contentType || "application/octet-stream",
       "Content-Length": String(buf.length),
-      "Content-Disposition": `attachment; filename="${asset.name.replace(/"/g, "")}"`,
+      "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${name}"`,
+      // an inline file must never be sniffed into something executable
+      "X-Content-Type-Options": "nosniff",
       "X-Sha256": asset.sha256,
     },
   });

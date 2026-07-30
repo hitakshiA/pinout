@@ -13,8 +13,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Website Clone",
-  description: "Pixel-perfect website clone",
+  title: {
+    default: "Pinout — metered payments for AI agents",
+    template: "%s · Pinout",
+  },
+  description:
+    "Agents rent their own compute, pay for it by the second on Hedera with " +
+    "x402, and are refunded what they do not use.",
+  metadataBase: new URL("https://pinout.club"),
+  openGraph: {
+    title: "Pinout — metered payments for AI agents",
+    description:
+      "Agents rent their own compute, pay for it by the second on Hedera, and " +
+      "are refunded what they do not use.",
+    url: "https://pinout.club",
+    siteName: "Pinout",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
