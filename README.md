@@ -13,6 +13,8 @@
 [![Hedera](https://img.shields.io/badge/Hedera-testnet-8259ef)](https://hashscan.io)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520-339933)](https://nodejs.org)
 
+**[pinout.club](https://pinout.club)** — try the hosted agent, no sign-up
+
 </div>
 
 x402 pays for a request at a price you already know. Compute is charged by the second and
@@ -575,7 +577,9 @@ node agent/chat.mjs -p "rent a GPU and…"  # headless
 
 ## The hosted agent
 
-`pinout.club` runs an agent that rents compute and pays for it out of a wallet you fund.
+**[pinout.club](https://pinout.club)** runs an agent that rents compute and pays for it out
+of a wallet you fund. Open it and give it a job; the [workspace](https://pinout.club/app)
+shows the machine it rents, what it spends, and every transaction on HashScan as it happens.
 There is no sign-up and no user table. A workspace is a random id plus a capability your
 browser keeps; the server stores only its SHA-256, so a database dump does not let anyone
 resume your work. Lose the capability and the workspace is gone.
@@ -664,6 +668,9 @@ price for work you will not do:
 ---
 
 ## Quickstart
+
+The fastest way to see it work is not to run it: **[pinout.club](https://pinout.club)** is
+live, needs no sign-up, and pays with real testnet HBAR. To run your own:
 
 ```bash
 git clone https://github.com/hitakshiA/pinout.git

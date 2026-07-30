@@ -21,5 +21,6 @@ last-session.json
 .club/
 web/node_modules/
 web/.next/
+.next/
 web/.env.local
 web/shot.mjs
