@@ -85,3 +85,28 @@ Isolation is worth the fee.
 
 Every phase gets a headless screenshot and a Codex review with the reference
 alongside the build.
+
+
+## A limit worth naming
+
+A job that outlives one session cannot finish, and nothing tells you that is
+what happened.
+
+Demo 1 was watched making 31 exec calls across three machines. Each machine hit
+the session ceiling, was torn down with its filesystem, and the agent re-rented,
+re-staged the input and began again, paying for the same work three times. From
+the outside it read as an agent looping stupidly. It was not: it was an agent
+being repeatedly reset by an infrastructure limit it had no way to see coming
+and no way to survive.
+
+Raising the ceiling buys room and does not fix the shape of it. Two things
+would:
+
+- **Tell the agent what it has.** A machine should report the wall clock it is
+  allowed, so a job that cannot fit is split rather than discovered halfway.
+- **Let progress outlive a machine.** Delivering an intermediate artifact makes
+  the next session resume rather than restart, which the chat already supports:
+  artifacts are inputs, and stage_input takes them by name.
+
+The second is the real answer, and it is the same idea the four-step pipeline
+already proves at the task level, applied one level down.
