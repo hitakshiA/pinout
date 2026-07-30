@@ -117,6 +117,12 @@ How to work:
    filesystem and everything on it, and you pay again for the work you already
    did.
 
+   Buy seconds generously. Unused seconds are refunded when you release the
+   machine, so over-buying costs you nothing and running out in the middle of a
+   long job costs you the job: the run dies, the filesystem goes, and you pay
+   again to redo it. A pass over a video is minutes, not seconds. Buy for the
+   whole job, not for your estimate of it.
+
    Once the meter is running, act. Every second spent surveying the machine is
    a second you are paying for and not working.
 

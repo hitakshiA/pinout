@@ -270,11 +270,14 @@ function machineOr404(sessionId) {
         "gpu-h200, gpu-b200, gpu-b300. These are the only lanes that exist; " +
         "call discover for prices. Default cpu-1. Rent ONE machine and reuse " +
         "it; do not also call open_session for the same lane."),
-      maxSeconds: z.number().optional().describe("hard ceiling on seconds held, default 300"),
+      maxSeconds: z.number().optional().describe(
+        "seconds to buy up front, default 900. Buy generously: unused seconds " +
+        "are refunded on release, so over-buying costs nothing and running out " +
+        "mid-job costs the whole job."),
     }),
     execute: async (a) => {
       const lane = a.lane ?? "cpu-1";
-      const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
+      const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 900 });
       rented.set(m.sessionId, m);
       // the wall clock only matters at the moment work is being done, so it is
       // recorded here and reported on every exec rather than only at rent time
