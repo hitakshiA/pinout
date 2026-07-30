@@ -24,3 +24,6 @@ web/.next/
 .next/
 web/.env.local
 web/shot.mjs
+
+# design-tool scratch, local to whoever is working on the UI
+.impeccable.md
