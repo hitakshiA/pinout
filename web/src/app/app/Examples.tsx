@@ -105,16 +105,16 @@ export function Examples({
   );
 }
 
-/** Fetch a sample and hand it back as base64, ready to attach. */
-export async function loadSample(file: string): Promise<string> {
+/**
+ * Fetch a sample as a File, the same thing a file picker hands over.
+ *
+ * It used to come back as base64 and get uploaded on the spot, which meant an
+ * example silently skipped the attachment UI: no chip in the composer, nothing
+ * to remove, and a prompt referring to a video with no video in sight. Handing
+ * back a File puts examples on the ordinary path instead of beside it.
+ */
+export async function loadSample(file: string, mime: string): Promise<File> {
   const res = await fetch(`/samples/${file}`);
   if (!res.ok) throw new Error(`could not load ${file}`);
-  const buf = await res.arrayBuffer();
-  let binary = "";
-  const bytes = new Uint8Array(buf);
-  // chunked: a 760 KB video blows the argument limit if spread in one call
-  for (let i = 0; i < bytes.length; i += 8192) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  }
-  return btoa(binary);
+  return new File([await res.blob()], file, { type: mime });
 }

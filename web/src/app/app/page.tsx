@@ -71,6 +71,7 @@ export default function Workspace() {
   const [pending, setPending] = useState<File[]>([]);
   const [rejected, setRejected] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const boxRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useStickToBottom(blocks.length + (working ? 1 : 0));
 
   /* ---------- workspace bootstrap: resume or mint ---------- */
@@ -119,6 +120,15 @@ export default function Workspace() {
     }, 6000);
     return () => clearInterval(t);
   }, [ws, chatId, running]);
+
+  /* The composer grew only on keystrokes, so a prompt dropped in by an example
+     stayed one line tall and hid its own tail. Size follows the value. */
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(190, el.scrollHeight)}px`;
+  }, [draft]);
 
   /* ---------- load a chat, replaying what it already holds ---------- */
   useEffect(() => {
@@ -456,19 +466,21 @@ export default function Workspace() {
     } finally { setBusy(false); }
   };
 
-  /** Load an example's file, attach it, and put its prompt in the composer. */
+  /**
+   * Load an example into the composer: its file as an attachment, its prompt as
+   * the draft. Nothing is uploaded yet, so it can be removed or edited first,
+   * exactly like a file the person chose themselves.
+   */
   const pickExample = async (e: Example) => {
     if (!ws || !chatId) return;
     setBusy(true);
     try {
-      const b64 = await loadSample(e.file);
-      await api.attach(ws.id, ws.cap, chatId, e.file, b64);
+      const f = await loadSample(e.file, e.mime);
+      setPending([f]);
+      setRejected([]);
       setDraft(e.prompt);
-      await refreshChat();
-      // the file is on the chat now, so the composer should not re-upload it
-      setPending([]);
     } catch (err) {
-      setBlocks((b) => [...b, { k: "note", id: `x${Date.now()}`, text: String(err), tone: "bad" }]);
+      setRejected([`Could not load ${e.file}: ${String(err)}`]);
     } finally { setBusy(false); }
   };
 
@@ -646,12 +658,9 @@ export default function Workspace() {
           <div className="ws-composer-wrap">
             <div className="ws-composer">
               <textarea
+                ref={boxRef}
                 rows={1} value={draft} placeholder="Give the agent a task…"
-                onChange={(e) => {
-                  setDraft(e.target.value);
-                  e.target.style.height = "auto";
-                  e.target.style.height = `${Math.min(190, e.target.scrollHeight)}px`;
-                }}
+                onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
                 }}
