@@ -131,9 +131,19 @@ export const compute = {
 
       try {
         while (emitted < n && alive) {
+          // Always yield, even when nothing is billable.
+          //
+          // This slept until meterStart + (emitted + 1) seconds, which was
+          // right while the meter tracked the wall clock. Billing compute
+          // rather than custody broke that assumption: on an idle machine
+          // `emitted` stops advancing, so the deadline is permanently in the
+          // past, the wait is negative, and the loop spins. It pegged a core
+          // and starved the event loop until the whole compute server stopped
+          // answering, which is a far worse bug than the one it came from.
           const dueAt = meterStart + (emitted + 1) * 1000;
           const wait = dueAt - Date.now();
-          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          // clamped: never longer than a second, never zero
+          await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(50, wait))));
 
           // If we fell behind (slow provider, GC), bill every whole second that
           // actually elapsed rather than silently losing them.
