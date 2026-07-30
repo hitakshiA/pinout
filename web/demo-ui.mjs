@@ -27,6 +27,7 @@ await p.click(".ws-send");
 console.log("task sent");
 
 const seen = new Set();
+let asks = 0;
 for (let i = 0; i < 400; i++) {
   await p.waitForTimeout(3000);
   const s = await p.evaluate(() => ({
@@ -41,11 +42,24 @@ for (let i = 0; i < 400; i++) {
   }));
   for (const t of s.tools) if (t && !seen.has(t)) { seen.add(t); console.log("  ·", t); }
   for (const d of s.decision) if (d && !seen.has("D" + d)) { seen.add("D" + d); console.log("  DECISION:", d); }
-  if (s.ask && !seen.has("ASK")) {
-    seen.add("ASK"); console.log("ASK shown");
-    await p.screenshot({ path: `/tmp/${TAG}-ask.png` });
+  // Answer every ask, not just the first. A long job asks more than once,
+  // and a driver that replies to one leaves the run parked forever.
+  if (s.ask) {
+    asks++;
+    console.log(`ASK #${asks}`);
+    if (asks === 1) await p.screenshot({ path: `/tmp/${TAG}-ask.png` });
+    // top the wallet up first so the approved spend can actually happen
+    const modes3 = await p.$$(".ws-panel-body .ws-tab");
+    if (modes3[1]) await modes3[1].click();
+    await p.waitForTimeout(300);
+    const amt = await p.$(".ws-panel-body .ws-field");
+    if (amt) { await amt.fill("2"); }
+    const top2 = await p.$(".ws-panel-body .ws-btn-primary");
+    if (top2) { await top2.click(); console.log("  topped up 2 HBAR"); }
+    await p.waitForTimeout(11000);
     const ok = await p.$(".ws-ask .ws-btn-primary");
     if (ok) { await ok.click(); console.log("  approved"); }
+    await p.waitForTimeout(2500);
   }
   if (s.arts && !seen.has("ART")) {
     seen.add("ART"); console.log("ARTIFACT shown:", s.arts);
