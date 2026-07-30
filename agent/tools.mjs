@@ -277,8 +277,23 @@ function machineOr404(sessionId) {
       const m = await pinout().rent(lane, { maxSeconds: a.maxSeconds ?? 300 });
       rented.set(m.sessionId, m);
       onSessionOpen?.(m.sessionId, lane);
+      // A machine has a wall clock, and an agent that does not know it plans a
+      // job it cannot finish. One ran 31 exec calls across three machines,
+      // each torn down at the ceiling with its filesystem, re-staging and
+      // starting over every time and paying for the same work three times. It
+      // was not looping stupidly; nobody had told it how long it had.
+      const ceiling = m.maxSessionDurationSeconds ?? null;
       return {
         sessionId: m.sessionId, lane, secondsPurchased: m.secondsPurchased,
+        ...(ceiling ? {
+          machineLifetimeSeconds: ceiling,
+          planWithin:
+            `This machine is destroyed ${ceiling} seconds after its last activity, ` +
+            `and its filesystem goes with it. Anything not delivered by then is ` +
+            `lost and you will pay to redo it. If the job will not fit, split it: ` +
+            `deliver what you have with deliver_file, release, and rent again. ` +
+            `A delivered file is an input you can stage back onto the next machine.`,
+        } : {}),
         youCanNow: ["exec", "upload_file", "download_file", "list_files"],
         remember: "the meter is running until you call release_machine",
       };

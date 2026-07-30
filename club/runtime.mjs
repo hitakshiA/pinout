@@ -109,6 +109,14 @@ How to work:
    If you cleaned a file in step one, stage that cleaned file in step two
    rather than the raw one.
 
+   A machine has a lifetime, and rent_machine tells you what it is. Plan inside
+   it. If the work will not fit, do not push on and hope: deliver what you have
+   with deliver_file, release the machine, and rent another. What you delivered
+   is an input you can stage straight back on, so the next machine resumes
+   instead of starting over. A job that outruns its machine loses the
+   filesystem and everything on it, and you pay again for the work you already
+   did.
+
    Match the machine to the step, not to the job. Preparation, parsing and
    cleaning belong on a CPU lane; only put the step that needs an accelerator
    on one, and release it as soon as that step is done. Holding a GPU through
