@@ -41,6 +41,25 @@ function clipOutput(text, limit = 6000) {
   };
 }
 
+/** Codecs a browser will actually decode, by their MP4 sample-description tag. */
+const PLAYABLE_IN_A_BROWSER = new Set(["avc1", "avc3", "vp09", "av01"]);
+
+/**
+ * The video codec of an MP4, read straight out of the sample description.
+ *
+ * `cv2.VideoWriter` defaults to the `mp4v` fourcc, which is MPEG-4 part 2 and
+ * plays in nothing. The file is a valid mp4, ffprobe reads it, `look_at` samples
+ * it happily, and the agent reports H.264 because that is what it meant to
+ * write — and then the human clicks it and gets a player stuck at 0:00 with no
+ * error. Nobody finds that without opening a browser, so catch it on the way in.
+ */
+function mp4VideoCodec(buf) {
+  const i = buf.indexOf("stsd", 0, "latin1");
+  if (i < 0 || i + 20 > buf.length) return null;
+  // stsd: 4 type + 4 version/flags + 4 entry count + 4 entry size, then the tag
+  return buf.toString("latin1", i + 16, i + 20);
+}
+
 /**
  * @param accountId/privateKey  pay from a specific wallet rather than the
  *        operator's. pinout.club gives every workspace its own custodial
@@ -723,9 +742,30 @@ function machineOr404(sessionId) {
       const m = machineOr404(a.sessionId);
       const got = await m.download(a.path);
       const buf = Buffer.isBuffer(got) ? got : Buffer.from(got.content ?? got, "base64");
+
+      // a video the human cannot play is not a delivered result
+      const name = a.name ?? a.path.split("/").pop();
+      if (/\.(mp4|m4v|mov)$/i.test(name)) {
+        const codec = mp4VideoCodec(buf);
+        if (codec && !PLAYABLE_IN_A_BROWSER.has(codec)) {
+          const out = a.path.replace(/\.[^.]+$/, "") + "_h264.mp4";
+          return {
+            error: `this mp4 is ${codec}, which no browser can play`,
+            why:
+              `The file is valid and look_at can read it, but the human opens it ` +
+              `in a browser and gets a player that never starts. cv2.VideoWriter ` +
+              `writes ${codec} unless you ask for something else.`,
+            fix:
+              `ffmpeg -y -i ${a.path} -c:v libx264 -preset veryfast ` +
+              `-pix_fmt yuv420p -movflags +faststart ${out}`,
+            then: `deliver_file that ${out} instead. Do not release the machine first.`,
+          };
+        }
+      }
+
       m._delivered = (m._delivered ?? 0) + 1;
       const art = assets.deliver({
-        name: a.name ?? a.path.split("/").pop(),
+        name,
         bytes: buf,
         description: a.description ?? null,
         fromPath: a.path,
