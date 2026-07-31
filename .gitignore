@@ -27,3 +27,7 @@ web/shot.mjs
 
 # design-tool scratch, local to whoever is working on the UI
 .impeccable.md
+
+# HyperFrames video projects: multi-GB source footage, renders and
+# node_modules. The compositions are small but worthless without the media.
+videos/
