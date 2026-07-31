@@ -758,6 +758,13 @@ function machineOr404(sessionId) {
             fix:
               `ffmpeg -y -i ${a.path} -c:v libx264 -preset veryfast ` +
               `-pix_fmt yuv420p -movflags +faststart ${out}`,
+            ifThereIsNoFfmpeg:
+              // the fleet image is python:3.11-slim, which ships neither ffmpeg
+              // nor an H.264 encoder; this wheel carries a static build of both
+              `pip install -q imageio-ffmpeg, then run the same arguments with ` +
+              `python -c "import imageio_ffmpeg,subprocess as s;` +
+              `s.run([imageio_ffmpeg.get_ffmpeg_exe(),'-y','-i','${a.path}',` +
+              `'-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart','${out}'],check=True)"`,
             then: `deliver_file that ${out} instead. Do not release the machine first.`,
           };
         }
