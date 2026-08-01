@@ -50,6 +50,7 @@ await m.release();                                   // unused seconds refunded 
 ## Table of contents
 
 - [How Pinout works](#how-pinout-works)
+- [Every action, on the public ledger](#every-action-on-the-public-ledger)
 - [Why Hedera](#why-hedera)
 - [The two tier ledger](#the-two-tier-ledger)
 - [Verification](#verification)
@@ -175,6 +176,54 @@ The refund is **not** gated behind the anchor. Gating it meant an anchor failure
 a buyer's balance. The anchor is queued and swept instead, and the verifier reports
 `PENDING_ANCHOR` (exit 3) rather than accusing an honest seller during the window before
 it lands.
+
+---
+
+## Every action, on the public ledger
+
+Nothing below is a diagram of what *should* happen. It is one real session on
+Hedera testnet — the one recorded in the demo — with a link to every
+transaction it produced. Open any of them; none of it is ours to edit.
+
+The session's own account is
+[`0.0.9861770`](https://hashscan.io/testnet/account/0.0.9861770), and the meter
+writes to topic
+[`0.0.9795865`](https://hashscan.io/testnet/topic/0.0.9795865) — memo
+`pinout metered burn ledger v1`.
+
+| # | Action | What actually happened | On Hedera |
+|---|--------|------------------------|-----------|
+| 1 | **The wallet opens** | The operator account `0.0.9795418` creates a brand-new Hedera account for this chat and funds it with 6 ℏ. The workspace holds its own money; it never spends the host's. | [CRYPTOCREATEACCOUNT](https://hashscan.io/testnet/transaction/0.0.9795418-1785532906-022190880) |
+| 2 | **The agent rents a machine and pays over x402** | `0.0.9861770` → `0.0.9795817`, **0.5688 ℏ**, one signed transfer for the seconds it asked for. Look at the fee line: the 0.0029 ℏ network fee is paid by `0.0.9185802`, a *different* account. The agent needs no HBAR for gas. | [CRYPTOTRANSFER](https://hashscan.io/testnet/transaction/0.0.9185802-1785532928-285912770) |
+| 3 | **It buys more seconds, mid job** | The job outlives the first payment, so the agent tops the same rental up rather than restarting: **0.2844 ℏ**, same machine, same session. | [CRYPTOTRANSFER](https://hashscan.io/testnet/transaction/0.0.9185802-1785533076-891866184) |
+| 4 | **And again** | **0.2844 ℏ.** The meter is charging by the second, so a longer job is simply more payments, not a bigger guess up front. | [CRYPTOTRANSFER](https://hashscan.io/testnet/transaction/0.0.9185802-1785533137-586926011) |
+| 5 | **And again** | **0.2844 ℏ.** Four payments, one rental. | [CRYPTOTRANSFER](https://hashscan.io/testnet/transaction/0.0.9185802-1785533195-326231139) |
+| 6 | **The unused balance comes back** | The work finishes early, so the seller returns what was paid for and not burned — **0.0142 ℏ** back to `0.0.9861770`. A refund is a transaction too; it cannot be quietly skipped. | [CRYPTOTRANSFER](https://hashscan.io/testnet/transaction/0.0.9795817-1785533263-362091176) |
+| 7 | **The receipt is written to the ledger** | The meter submits the settlement to the HCS topic: session id, price per second, seconds burned, amount owed, amount refunded, and the running hash that binds it to every message before it. This is the record the verifier recomputes. | [CONSENSUSSUBMITMESSAGE](https://hashscan.io/testnet/transaction/0.0.9795817-1785533375-616923865) |
+
+Reading the receipt in row 7 is the whole point, so here is what one contains:
+
+```json
+{"t":"settle-batch","v":1,"cause":"batched-settlement","count":1,
+ "sessions":[{"session":"2a8d6227-a69b-4320-90f4-16d34944e9b3",
+              "payer":"0.0.9861770",
+              "priceTinybar":474000,
+              "burned":297,
+              "owedTinybar":140778000,
+              "refundTinybar":1422000}],
+ "burnTopic":"0.0.9795896",
+ "burnFinalSeq":1026,
+ "burnFinalRunningHash":"nsn/w8Nh8i64aD4WwycHaKlatJIWUX/+TLRppnhUOSpTv2qN13FeRurkYiGIrMo8"}
+```
+
+`priceTinybar × burned = owedTinybar` — 474000 × 297 = 140,778,000 — and the
+refund is whatever was paid above it. That multiplication is the bill, and you
+can do it yourself from the link above without asking us for anything.
+
+`burnFinalSeq` and `burnFinalRunningHash` point at the second-by-second burn
+ledger on topic [`0.0.9795896`](https://hashscan.io/testnet/topic/0.0.9795896),
+so the settlement is bound to the individual seconds it is claiming for, not
+just asserted alongside them.
 
 ---
 
