@@ -1,0 +1,189 @@
+# Pinout Compute — how an agent rents machines and pays for them
+
+Pinout sells CPU and GPU machines **by the second** over x402 on Hedera testnet.
+You buy seconds, hold a machine, run code on it, take your files off, and give
+it back. Whatever you paid for and did not burn is refunded on chain. There is
+no account, no sign-up and no API key: the payment *is* the authentication.
+
+Base URL: `https://compute.pinout.club`
+Network: `hedera:testnet` · asset `0.0.0` (HBAR) · amounts always in **tinybar**
+(1 ℏ = 100,000,000 tinybar). Nothing here touches mainnet.
+
+Source, and the verifier: https://github.com/hitakshiA/pinout
+
+---
+
+## 1. Look before you buy
+
+```
+GET /lanes
+```
+
+Returns every lane with its price and limits. Do this first; do not guess a lane
+name or a price. Today's lanes, cheapest first:
+
+| lane | what it is | tinybar/s | ≈ ℏ/hour |
+|---|---|---|---|
+| `cpu-1` | 1 vCPU, 1 GiB | 30,000 | 1.08 |
+| `cpu-2` | 2 vCPU, 4 GiB | 74,000 | 2.66 |
+| `cpu-4` | 4 vCPU, 8 GiB | 147,000 | 5.29 |
+| `gpu-t4` | Tesla T4, 15.6 GB | 474,000 | 17.06 |
+| `gpu-l4` | L4, 23.7 GB | 778,000 | 28.01 |
+| `gpu-a10` | A10, 23.7 GB | 912,000 | 32.83 |
+| `gpu-l40s` | L40S, 47.7 GB | 1,712,000 | 61.63 |
+| `gpu-a100-80` | A100 SXM4, 85 GB | 2,296,000 | 82.66 |
+| `gpu-h200` | H200, 150 GB | 3,796,000 | 136.66 |
+| `gpu-b200` | B200, 191 GB | 5,149,000 | 185.36 |
+| `gpu-b300` | B300 SXM6, 287 GB | 6,209,000 | 223.52 |
+
+A `gpu-b300` costs **207x** a `cpu-1` per second. Pick by what the job actually
+needs — VRAM first, then price. Most jobs that are not model training want a
+`cpu-*` lane or a `gpu-t4`.
+
+## 2. The x402 exchange
+
+Every paid route answers `402` with the terms in a **header**, not the body.
+
+```
+POST /compute/cpu-1        →  402
+                              PAYMENT-REQUIRED: <base64 JSON>
+```
+
+Decode it. It looks like:
+
+```json
+{ "x402Version": 2,
+  "resource": { "url": "...", "description": "Rent cpu-1 by the second (30000 tinybar/s ...)" },
+  "accepts": [{ "scheme": "exact", "network": "hedera:testnet",
+                "amount": "3600000", "asset": "0.0.0",
+                "payTo": "0.0.9795817", "maxTimeoutSeconds": 180,
+                "extra": { "feePayer": "0.0.9185802" } }] }
+```
+
+Check three things **before you sign anything**:
+
+1. `accepts[0].network === "hedera:testnet"`
+2. `amount` is within your per-call cap
+3. total spent + `amount` is within your budget
+
+Then sign the transfer and retry the same request with:
+
+```
+PAYMENT-SIGNATURE: <base64 JSON payload>
+```
+
+`extra.feePayer` means a different account pays the Hedera network fee, so you
+need HBAR for the amount but not for gas.
+
+**A 402 on the retry is not an error.** It is a fresh quote — top-up prices come
+from live session state, so a few seconds of drift re-prices it. Sign the new
+terms **once**. Signing twice in a row is a loop; stop and report instead.
+
+## 3. Rent, use, release
+
+```
+POST /compute/<lane>            paid → { sessionId, credits }
+GET  /session/<id>/stream?provider=compute&hold=1&n=<maxSeconds>
+POST /session/<id>/exec         run Python; the filesystem persists between calls
+POST /session/<id>/files        put a file on it
+GET  /session/<id>/files?path=  take a file off, sha256 checked
+GET  /session/<id>/files?dir=   list a directory
+POST /session/<id>/code         stage code too big for a query string
+POST /topup/<lane>/<id>         paid → more seconds, same machine
+POST /session/<id>/close        release: refund, anchor, signed receipt
+GET  /session/<id>              status
+```
+
+One-shot, when the job is a single known script and you do not need to look at
+intermediate state:
+
+```
+GET /session/<id>/stream?provider=compute&n=<maxSeconds>&code=<base64>
+```
+
+That rents, runs and releases in one call. It is almost always the cheaper shape.
+
+## 4. The five things that cost people money
+
+1. **Release the machine.** `POST /session/<id>/close`. The meter runs until you
+   do, and the filesystem is destroyed when you do — so download your artifacts
+   *first*. This is the single most expensive mistake.
+2. **Your thinking time is billed.** Deliberating between `exec` calls costs the
+   same as computing. Decide first, then rent. Prefer one-shot over rent-and-think.
+3. **One purchase buys ~120 seconds.** That is the per-purchase cap, not the job
+   limit. A longer job is a normal sequence of `topup` calls on the same session,
+   not a bigger first payment.
+4. **Running out does not destroy the session.** When credits hit zero the machine
+   is held, unbilled, for a ~90 second grace period. Top up inside it and the job
+   carries on from where it stopped. Miss it and the machine is gone.
+5. **Deliver video as H.264.** `cv2.VideoWriter` defaults to the `mp4v` fourcc,
+   which is MPEG-4 part 2 — ffprobe reads it, every browser refuses it, and the
+   human gets a player stuck at 0:00. Re-encode before you hand it over:
+   `ffmpeg -i in.mp4 -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4`.
+   The machine image is `python:3.11-slim` and ships **no ffmpeg** — get one with
+   `pip install imageio-ffmpeg` and use `imageio_ffmpeg.get_ffmpeg_exe()`.
+
+## 5. Budgeting
+
+Estimate before you rent: `seconds_you_need × tinybar_per_second`, then add ~50%
+for start-up and your own overhead. Buy that, not the maximum.
+
+Rules that keep a run honest:
+
+- Set a **per-call cap** and a **total budget**, and enforce both before signing.
+  A mispriced or injected 402 then cannot touch your funds.
+- Watch `spend_report` (or your own tally) rather than the wall clock.
+- If a top-up would exceed the budget, stop and ask the human. Do not silently
+  spend past it.
+- Unused seconds come back automatically at `close` — do not pad "just in case"
+  expecting to keep it; padding costs you nothing at settlement but it does tie
+  up balance you might need for the next top-up.
+
+## 6. Checking the bill
+
+Every session anchors to Hedera Consensus Service. Recompute it yourself from
+the public mirror node — no key, no permission needed:
+
+```bash
+npx pinout verify <sessionId>      # or: npm run verify -- <sessionId>
+```
+
+The arithmetic that has to close:
+
+```
+total payments − refund  ==  agreed rate × recorded seconds
+```
+
+The settlement message carries `priceTinybar`, `burned`, `owedTinybar`,
+`refundTinybar` and a running hash binding it to every message before it. Topic
+`0.0.9795865` on testnet, readable at https://hashscan.io/testnet/topic/0.0.9795865
+
+## 7. Tools, if you use the MCP server or the plugin
+
+`rent_machine` · `exec` · `upload_file` · `download_file` · `list_files` ·
+`release_machine` · `run_compute` (one-shot) · `top_up` · `verify_session` ·
+`spend_report` · `discover`
+
+MCP: `npm run mcp` in a clone of the repo.
+Hedera Agent Kit v4: `import { pinoutPlugin } from "pinout/agent-kit"`.
+
+## 8. Wallet handling — read this before creating anything
+
+You need a funded Hedera **testnet** account with an **ECDSA (secp256k1)** key.
+ED25519 keys will not work for x402 signing here.
+
+- **Never ask the human for a private key.** Generate your own.
+- Write it to `.env` (`HEDERA_ACCOUNT_ID`, `HEDERA_PRIVATE_KEY`) and make sure
+  `.env` is gitignored. Never print a private key into the chat, a log, a commit
+  or a comment.
+- The human funds you by sending testnet HBAR to your **account id**, which is
+  public and safe to show. They can get testnet HBAR free at
+  **https://portal.hedera.com/faucet**.
+- 20–50 ℏ is plenty to explore. `cpu-1` for ten minutes is about 0.18 ℏ.
+
+## 9. If you would rather not run a wallet at all
+
+**https://pinout.club/app** is a hosted agent that already holds a custodial
+testnet wallet. Give it a task and a file, it picks the machine, pays, tops up
+when it runs short and refunds the rest. Use that to see the whole flow working
+before you wire up your own.

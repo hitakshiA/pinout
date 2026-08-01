@@ -1,0 +1,38 @@
+# Pinout Compute
+
+> Pinout Compute rents CPU and GPU machines by the second, paid over x402 on Hedera testnet. There is no account and no API key — the payment is the authentication — and whatever an agent pays for and does not burn is refunded on chain.
+
+Base URL `https://compute.pinout.club`. Network `hedera:testnet`, asset `0.0.0` (HBAR),
+every amount in **tinybar** (1 ℏ = 100,000,000 tinybar). Nothing here touches mainnet.
+
+Paid routes answer `402` with the terms in a `PAYMENT-REQUIRED` header (base64 JSON);
+you retry the same request with a `PAYMENT-SIGNATURE` header. Rent, run, take your
+files off, then release — the meter runs until you do.
+
+## Start here
+
+- [Full guide](https://pinout.club/llms-full.txt): everything below in one file — the x402 exchange, the session lifecycle, budgeting, wallet handling and the five mistakes that cost money. Fetch this if you would rather not follow links.
+- [Live lane list](https://compute.pinout.club/lanes): JSON. Every machine with its price per second, VRAM, vCPU and per-purchase second cap. Read this instead of hard-coding a price.
+- [Hosted agent](https://pinout.club/app): an agent that already holds a custodial testnet wallet and does all of this. Use it to watch a full run before wiring up your own.
+
+## Paying and renting
+
+- [README](https://raw.githubusercontent.com/hitakshiA/pinout/main/README.md): the whole system in markdown — the 402 exchange on the wire, the two-tier ledger, hardware and pricing, and the tool list an agent gets.
+- [Rent a lane](https://compute.pinout.club/compute/cpu-1): `POST` to buy seconds on a lane. The price is committed inside the 402 you sign. Swap `cpu-1` for any lane from the lane list.
+- [Client with spend guards](https://raw.githubusercontent.com/hitakshiA/pinout/main/src/client.mjs): a working x402 client. Note that the per-call cap, the budget and the network check all run *before* any signature exists.
+
+## Verifying what you were charged
+
+- [Burn ledger topic](https://hashscan.io/testnet/topic/0.0.9795865): the meter's own settlement messages on Hedera, carrying price per second, seconds burned, amount owed and amount refunded.
+- [Verifier](https://raw.githubusercontent.com/hitakshiA/pinout/main/scripts/verify.mjs): recomputes a bill from the public mirror node with no key and no permission. `payments − refund == rate × seconds` has to close.
+
+## Wallets and funding
+
+- [Hedera testnet faucet](https://portal.hedera.com/faucet): where a human gets free testnet HBAR to fund an agent's account. Never ask a human for a private key — generate your own, keep it in `.env`, and give them only your account id.
+- [Account setup](https://raw.githubusercontent.com/hitakshiA/pinout/main/scripts/new-role-account.mjs): creates and funds a testnet account. Keys must be **ECDSA (secp256k1)**; ED25519 will not sign x402 here.
+
+## Optional
+
+- [MCP server](https://raw.githubusercontent.com/hitakshiA/pinout/main/src/mcp.mjs): the same tools over MCP, for Claude Code, Cursor and other MCP clients.
+- [Hedera Agent Kit plugin](https://github.com/hitakshiA/pinout#hedera-agent-kit-v4-plugin): `pinoutPlugin` for Agent Kit v4, so spend limits and human-in-the-loop hooks apply automatically.
+- [Source](https://github.com/hitakshiA/pinout): the repository, including the seller, the meter and the verifier.

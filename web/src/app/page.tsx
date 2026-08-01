@@ -38,10 +38,85 @@ const GROUPS = [
   ]},
 ];
 
+/**
+ * What gets put on the clipboard when someone picks their agent.
+ *
+ * It is deliberately not a copy of llms.txt — that file is the reference, this
+ * is the instruction. It tells the agent where to read, what to build, and the
+ * two things that go wrong when an agent is handed a wallet: asking the human
+ * for a private key, and leaving a machine running.
+ */
+const promptFor = (agent: string) => `Read https://pinout.club/llms.txt first, then \
+https://pinout.club/llms-full.txt. They describe Pinout Compute: CPU and GPU machines \
+rented by the second, paid over x402 on Hedera testnet, with unused seconds refunded on \
+chain. There is no account and no API key — the payment is the authentication.
+
+I want you to set yourself up to rent compute on my behalf, and then use it for the work I \
+give you.
+
+Set-up, in this order:
+
+1. Read both files above before writing anything. Read the live lane list at \
+https://compute.pinout.club/lanes so you are using real prices, not remembered ones.
+2. Create your own Hedera **testnet** account with an **ECDSA (secp256k1)** key — ED25519 \
+will not sign x402 here. Generate it with a script; do not ask me for a key and do not \
+paste one into this chat.
+3. Write the credentials to \`.env\` as HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY, and make \
+sure \`.env\` is gitignored. Never print the private key — not in chat, not in a log, not \
+in a commit, not in a comment. If you ever need to show me something, show the account id.
+4. Tell me your account id and ask me to fund it from the Hedera testnet faucet at \
+https://portal.hedera.com/faucet. 20–50 testnet HBAR is plenty. Wait until you can see the \
+balance before spending.
+5. Set a per-call cap and a total budget in your client, and enforce both *before* signing \
+any 402. Tell me what you set them to.
+
+Then, whenever I give you a job that needs compute:
+
+- Pick the lane from the live list by what the job actually needs — VRAM first, then price. \
+A gpu-b300 costs 207x a cpu-1 per second. Most jobs that are not model training want a \
+cpu-* lane or a gpu-t4.
+- Estimate seconds × tinybar/s before you rent, and tell me the estimate.
+- Prefer the one-shot form when the job is a single known script; renting and then thinking \
+bills you for the thinking.
+- One purchase buys about 120 seconds. A longer job is a normal sequence of top-ups on the \
+same session, not a bigger first payment.
+- Download the artifacts BEFORE you release. The filesystem is destroyed on release.
+- ALWAYS release the machine when you are done. The meter runs until you do. This is the \
+single most expensive mistake.
+- If a top-up would take you past the budget, stop and ask me rather than spending through it.
+- When you deliver a video, encode H.264 — cv2.VideoWriter's default mp4v fourcc produces a \
+file no browser will play.
+
+Afterwards, show me what it cost and how to check it: the session id, the total spent, the \
+refund, and the HashScan link. The bill is recomputable from Hedera's public mirror node, \
+so I should never have to take your word for it.
+
+Start by reading the two files, then tell me your plan and what you are about to spend.`;
+
 export default function Page() {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const [showAnn, setShowAnn] = useState(true);
   const [unit, setUnit] = useState<"sec" | "hr">("sec");
+
+  async function copyPrompt(agent: string) {
+    const text = promptFor(agent);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // clipboard is blocked outside a secure context and in some embedded
+      // browsers; a hidden textarea still works there
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    setCopied(agent);
+    window.setTimeout(() => setCopied((c) => (c === agent ? null : c)), 4200);
+  }
 
   return (
     <>
@@ -78,11 +153,20 @@ export default function Page() {
             <span className="install-lab">Install on your agent</span>
             <div className="install-row">
               {AGENTS.map((a, i) => (
-                <span className="ag" key={a.name} style={{ animationDelay: `${i * 70}ms` }}>
-                  <img src={a.src} alt={a.name} className={a.invert ? "ag-inv" : undefined} />
+                <button type="button" className="ag" key={a.name}
+                        style={{ animationDelay: `${i * 70}ms` }}
+                        onClick={() => copyPrompt(a.name)}
+                        title={`Copy the set-up prompt for ${a.name}`}
+                        aria-label={`Copy the Pinout set-up prompt for ${a.name}`}>
+                  <img src={a.src} alt="" className={a.invert ? "ag-inv" : undefined} />
                   <span className="ag-name" aria-hidden="true">{a.name}</span>
-                </span>
+                </button>
               ))}
+            </div>
+            <div className="ag-copied" role="status" aria-live="polite">
+              {copied
+                ? <>Prompt copied — paste it into <b>{copied}</b></>
+                : <span className="ag-hint">Pick your agent to copy a set-up prompt</span>}
             </div>
             <span className="or"><i /><span>or</span><i /></span>
             <a className="btn btn-p btn-xl btn-try" href="/app">Try Now (Hosted Agent)</a>

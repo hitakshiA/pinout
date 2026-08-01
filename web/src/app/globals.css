@@ -667,6 +667,16 @@ h1,h2,h3{font-family:"ABC Diatype",Arial,sans-serif;letter-spacing:normal}
 .ag img{width:21px;height:21px;object-fit:contain;filter:grayscale(1) brightness(1.7);opacity:.72;
         transition:filter .18s ease,opacity .18s ease}
 .ag:hover img{filter:none;opacity:1}
+.ag{padding:0;cursor:pointer;font:inherit;color:inherit;-webkit-appearance:none;appearance:none}
+.ag:active{transform:translateY(-1px) scale(.96)}
+.ag:focus-visible{outline:2px solid var(--purple);outline-offset:3px}
+/* the row is the only affordance saying these are clickable, so the line under
+   it has to hold its height whether or not anything has been copied yet */
+.ag-copied{min-height:20px;font-size:13px;color:var(--fg);text-align:center;
+           transition:color .2s ease}
+.ag-copied b{color:var(--purple)}
+.ag-hint{color:var(--dim);font-family:var(--mono);font-size:11px;
+         letter-spacing:.08em;text-transform:uppercase}
 @keyframes agin{from{opacity:0;transform:translateY(9px) scale(.9)}to{opacity:1;transform:none}}
 .btn-xl{font-size:16px;padding:15px 30px;margin-top:6px}
 .btn-try{background:var(--purple);box-shadow:0 14px 40px -16px var(--purple)}
