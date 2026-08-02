@@ -102,11 +102,16 @@ export default function Workspace() {
 
   const refreshChat = useCallback(async () => {
     if (!ws || !chatId) return;
-    const [c, w] = await Promise.all([
+    // The list comes too: a chat is renamed from its first task the moment the
+    // run starts, and refetching only the open chat left the sidebar showing
+    // the placeholder until someone reloaded the page.
+    const [c, w, list] = await Promise.all([
       api.chat(ws.id, ws.cap, chatId),
       api.wallet(ws.id, ws.cap, chatId).catch(() => null),
+      api.chats(ws.id, ws.cap).catch(() => null),
     ]);
     setChat(c); setWallet(w);
+    if (list?.chats) setChats(list.chats);
   }, [ws, chatId]);
 
   /* The balance moves without telling anyone.
