@@ -329,8 +329,21 @@ app.post("/workspace/:id/chats/:chatId/run", async (c) => {
       `. They are already in this chat; stage_input puts them on a machine by name.`
     : task;
 
+  /*
+   * Name the chat after the job it was opened for.
+   *
+   * This only ever fired when the title was the string "New chat", and the web
+   * client creates chats titled "New task" — so nothing was ever renamed and
+   * every chat in the sidebar read "New task". Key off whether the chat has
+   * been given work yet instead of matching a placeholder by spelling, and
+   * never spend a model call on a title the user already wrote.
+   */
+  const firstTask = !t.turns.some((x) => x.role === "user");
   threads.addTurn(t.id, { role: "user", text: task });
-  if (t.title === "New chat") threads.rename(t.id, task.slice(0, 60));
+  if (firstTask && task.trim()) {
+    const name = task.trim().replace(/\s+/g, " ");
+    threads.rename(t.id, name.length > 60 ? name.slice(0, 57).trimEnd() + "…" : name);
+  }
   try {
     const run = await rt.startRun(a.w.id, {
       task: taskForAgent, ceilingTinybar, threadId: t.id });

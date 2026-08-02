@@ -16,7 +16,7 @@
 // Rejecting hands the model an error it can re-plan from, which is why "change
 // the plan" is the same mechanism as "no" and not a third code path.
 import { EventEmitter } from "node:events";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   OpenRouter, tool, serializeConversationState, deserializeConversationState,
@@ -737,6 +737,50 @@ async function drive(run, opts) {
   throw lastErr;
 }
 
+
+/**
+ * Shrink a chat's memory when it has grown past the window.
+ *
+ * threads.js has had the whole compaction machinery for a while — it knows
+ * which turns are load-bearing, which are summarisable and what to keep — and
+ * nothing ever called it, so a chat used a few times in a row simply grew until
+ * the model refused it. This is the caller it was waiting for.
+ *
+ * The summary is assembled here rather than by a model: what matters about an
+ * old turn is that a machine was rented, a file was produced, money moved. A
+ * second model call to phrase that costs the user real HBAR and can be wrong
+ * about the numbers, which are the one thing that must survive intact.
+ */
+function compactIfNeeded(run) {
+  const id = run.threadId;
+  if (!id) return [];
+  let plan;
+  try { plan = threads.planCompaction(id); } catch { return []; }
+  if (!plan?.needed) return [];
+
+  const lines = [];
+  for (const turn of plan.summarise) {
+    const name = turn.tool?.name;
+    if (name) lines.push(`- called ${name}`);
+    else if (turn.role === "user") lines.push(`- you were asked: ${String(turn.text ?? "").slice(0, 120)}`);
+    else if (turn.text) lines.push(`- you said: ${String(turn.text).slice(0, 160)}`);
+  }
+  const summary =
+    `${plan.summarise.length} earlier turns, condensed. The money and the files ` +
+    `they produced are still in this chat verbatim; only the chatter is gone.\n` +
+    lines.slice(0, 60).join("\n");
+
+  threads.applyCompaction(id, { summary, replacedIds: plan.summarise.map((x) => x.id) });
+
+  // The SDK owns the real conversation memory in its own file, so trimming our
+  // copy alone would change nothing. Drop it and hand back the rebuilt context
+  // to seed the next call.
+  try { rmSync(stateFile(id), { force: true }); } catch { /* nothing to drop */ }
+  run.say("compacted", { covered: plan.summarise.length, freedApprox: plan.freesApprox,
+                         reason: plan.reason });
+  return threads.buildContext(id);
+}
+
 async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
   const or = new OpenRouter({ apiKey: env.OPENROUTER_API_KEY });
 
@@ -983,7 +1027,10 @@ export async function startRun(workspaceId, { task, ceilingTinybar, budgetTinyba
   (async () => {
     try {
       run.say("task", { task, ceilingTinybar: ceiling });
-      const out = await drive(run, { input: [{ role: "user", content: task }] });
+      // a chat is many tasks over time, so check the window before each one
+      const prefix = compactIfNeeded(run);
+      const out = await drive(run, {
+        input: [...prefix, { role: "user", content: task }] });
       if (!out.parked) await finish(run);
     } catch (e) {
       // Say what survived, not just what broke.

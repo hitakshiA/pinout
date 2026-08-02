@@ -538,10 +538,11 @@ export default function Workspace() {
   };
 
   const newChat = async () => {
-    if (!ws) return;
+    if (!ws) return null;
     const c = await api.newChat(ws.id, ws.cap, "New task");
     setChats((s) => [{ id: c.id, title: c.title, updatedAt: Date.now(), turns: 0, artifacts: 0, running: false }, ...s]);
-    setChatId(c.id); setBlocks([]);
+    setChatId(c.id); setBlocks([]); setWallet(null);
+    return c.id;
   };
 
   const money = {
