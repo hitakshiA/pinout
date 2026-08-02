@@ -181,9 +181,26 @@ export function lanePricing(lane) {
   const l = RATES.lanes[lane];
   if (!l) throw new Error(`unknown lane ${lane}`);
   const pricePerUnit = l.creditTinybar;
-  // Default budget = 120 seconds of that lane, rounded to a whole tinybar.
+  /*
+   * A rental buys most of the session ceiling, not a flat two minutes.
+   *
+   * It used to buy 120s and top up 60s at a time, which is why a half-hour job
+   * paid eighteen times: each purchase is an x402 signature and a Hedera
+   * transaction, and the meter kept hitting zero between them. Worse, hitting
+   * zero parks the session in PAUSED, and if the next payment misses the grace
+   * window the machine is destroyed and the inputs have to be staged again —
+   * six rentals and six re-uploads for one ten-second clip.
+   *
+   * The ceiling is the real limit, so quote against it. A job that finishes
+   * early is refunded the remainder anyway, so buying long costs nothing.
+   */
+  const ceiling = maxSecondsFor(lane);
+  const rentSeconds = Math.max(120, Math.floor(ceiling * 0.8));
+  const topUpSeconds = Math.max(60, Math.floor(rentSeconds / 2));
   return { lane, unit: "second", pricePerUnit, fleet: l.fleet,
-           sessionTinybar: pricePerUnit * 120, topUpTinybar: pricePerUnit * 60 };
+           rentSeconds, topUpSeconds,
+           sessionTinybar: pricePerUnit * rentSeconds,
+           topUpTinybar: pricePerUnit * topUpSeconds };
 }
 
 /**

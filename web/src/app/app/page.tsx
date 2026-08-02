@@ -7,7 +7,7 @@ import {
   type Chat, type ChatSummary, type RunEvent, type Wallet,
 } from "./api";
 import {
-  AgentText, ArtifactCard, FileRefProvider, FundingAsk, ToolLine, Working,
+  AgentText, ArtifactCard, FileRefProvider, FundingAsk, ToolLine, Working, doing,
   useStickToBottom, type ToolMark,
 } from "./Transcript";
 import { Panel } from "./Panel";
@@ -240,8 +240,8 @@ export default function Workspace() {
         break;
       }
       case "tool": {
-        // attach to the sentence it belongs to
-        setWorking({ what: "Working", since: Date.now() });
+        // attach to the sentence it belongs to, and say what is running now
+        setWorking({ what: doing(String(ev.name ?? "")), since: Date.now() });
         setBlocks((b) => {
           const copy = [...b];
           for (let i = copy.length - 1; i >= 0; i--) {

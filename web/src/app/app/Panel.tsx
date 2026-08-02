@@ -185,7 +185,11 @@ function Money({
   const [to, setTo] = useState("");
   const [mode, setMode] = useState<"wallet" | "direct">("wallet");
 
+  // one funding action is capped server-side; say so here rather than letting
+  // someone type 500 and get a 400 back
+  const MAX_PER_CALL = 10;
   const tinybar = Math.round(parseFloat(amount || "0") * 1e8);
+  const over = tinybar > MAX_PER_CALL * 1e8;
   const accountId = wallet?.accountId ?? null;
 
   return (
@@ -234,10 +238,16 @@ function Money({
             Funds the chat from the operator account so you can watch the whole flow
             without a wallet installed. Real HBAR, real payments, testnet.
           </div>
+          {over && (
+            <div className="ws-shortfall" style={{ marginTop: 9 }}>
+              One transfer is capped at {MAX_PER_CALL} &#8462;. Send it in smaller
+              amounts, as many times as you need.
+            </div>
+          )}
           <button className="ws-btn ws-btn-primary" style={{ marginTop: 11, width: "100%" }}
-                  disabled={busy || !(tinybar > 0)}
+                  disabled={busy || !(tinybar > 0) || over}
                   onClick={() => onFundDirect(tinybar)}>
-            Send {hbar(tinybar)} to the agent
+            {over ? `Over the ${MAX_PER_CALL} \u210f limit` : `Send ${hbar(tinybar)} to the agent`}
           </button>
         </>
       )}

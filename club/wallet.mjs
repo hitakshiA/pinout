@@ -26,6 +26,26 @@ import { env, mirror } from "../src/config.mjs";
 export const MIN_FUND_TINYBAR = 100_000_000;   // 1 HBAR
 /** Refuse to custody more than this per workspace on testnet. */
 const MAX_FUND_TINYBAR = 5_000_000_000;    // 50 HBAR
+/**
+ * The most one funding action may move, whoever asks.
+ *
+ * The ceiling above is a lifetime-of-the-workspace limit, which does nothing to
+ * stop a single fat-fingered or scripted transfer. This is per call: fund again
+ * if more is genuinely needed, and a mistake costs at most this much.
+ */
+export const MAX_FUND_PER_CALL_TINYBAR = 1_000_000_000;   // 10 HBAR
+
+/** Throws unless `tinybar` is a sane amount for one funding action. */
+export function assertFundable(tinybar) {
+  const n = Number(tinybar);
+  if (!Number.isFinite(n) || n <= 0) throw new Error("give an amount in tinybar");
+  if (n > MAX_FUND_PER_CALL_TINYBAR) {
+    throw new Error(
+      `one funding action is capped at ${MAX_FUND_PER_CALL_TINYBAR / 1e8} ℏ ` +
+      `(asked for ${(n / 1e8).toFixed(4)} ℏ). Send it in smaller amounts.`);
+  }
+  return n;
+}
 
 function operator() {
   const c = Client.forTestnet();
@@ -48,6 +68,7 @@ export async function createWorkspaceAccount({ funderAccountId, initialTinybar }
   // and let the remainder go home on close, where every unused tinybar goes
   // anyway.
   const funded = Math.max(initialTinybar, MIN_FUND_TINYBAR);
+  assertFundable(funded);
   if (funded > MAX_FUND_TINYBAR) {
     throw new Error(`this build will not custody more than ${MAX_FUND_TINYBAR} tinybar per workspace`);
   }
@@ -124,6 +145,7 @@ export async function confirmFunding({ accountId, funderAccountId, expectTinybar
  * be anyone else.
  */
 export async function sendToWorkspace({ accountId, tinybar, from }) {
+  assertFundable(tinybar);
   const client = operator();
   try {
     const resp = await new TransferTransaction()
@@ -237,4 +259,5 @@ export const CUSTODY_DISCLOSURE = {
   onClose: "The balance is returned to your account and the account is deleted.",
   notForMainnet: true,
   maxTinybar: MAX_FUND_TINYBAR,
+  maxPerCallTinybar: MAX_FUND_PER_CALL_TINYBAR,
 };

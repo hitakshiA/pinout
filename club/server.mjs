@@ -495,6 +495,12 @@ app.post("/workspace/:id/chats/:chatId/fund-direct", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const tinybar = Number(body?.tinybar ?? 0);
   if (!(tinybar > 0)) return c.json({ error: "give an amount in tinybar" }, 400);
+  if (tinybar > CUSTODY_DISCLOSURE.maxPerCallTinybar) {
+    return c.json({
+      error: `one funding action is capped at ${CUSTODY_DISCLOSURE.maxPerCallTinybar / 1e8} \u210f`,
+      maxPerCall: CUSTODY_DISCLOSURE.maxPerCallTinybar,
+    }, 400);
+  }
   if (tinybar > CUSTODY_DISCLOSURE.maxTinybar) {
     return c.json({ error: "above what this build will custody", max: CUSTODY_DISCLOSURE.maxTinybar }, 400);
   }

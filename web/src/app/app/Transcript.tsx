@@ -65,6 +65,18 @@ const DOING: Record<string, string> = {
 
 export type ToolMark = { name: string; done?: boolean; ok?: boolean };
 
+/**
+ * "Running code" for the call that is in flight right now.
+ *
+ * The live line said "Working…" for half an hour whatever the agent was doing,
+ * so the one question a person actually has while waiting — what is it doing? —
+ * was the one thing on screen that never answered it.
+ */
+export function doing(name: string) {
+  const s = DOING[name];
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : "Working";
+}
+
 /** "ran code twice, looked at the output" — or "running code" while it runs. */
 export function toolLine(marks: ToolMark[]) {
   const counts = new Map<string, { n: number; pending: number; failed: number }>();
@@ -82,7 +94,13 @@ export function toolLine(marks: ToolMark[]) {
     // a failure is the one thing that must not be summarised away
     return e.failed ? `${said}${times} (${e.failed} failed)` : `${said}${times}`;
   });
-  const s = parts.join(", ");
+  // A long run makes a hundred calls. Listing every kind produces a sentence
+  // that runs for four lines and is read by nobody; keep the newest handful.
+  const MAX = 6;
+  const shown = parts.length > MAX
+    ? [...parts.slice(0, MAX), `and ${parts.length - MAX} more`]
+    : parts;
+  const s = shown.join(", ");
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
