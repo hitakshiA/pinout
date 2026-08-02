@@ -171,7 +171,7 @@ function Connect({
 }
 
 function Money({
-  wallet, onFundDirect, onFundSigned, onWithdraw, busy, needs,
+  wallet, onFundDirect, onFundSigned, onWithdraw, busy, needs, fundMode, onFundMode,
 }: {
   wallet: Wallet | null;
   needs: number | null;
@@ -179,17 +179,22 @@ function Money({
   onFundSigned: (from: string, tinybar: number) => void;
   onWithdraw: (tinybar: number | undefined, to: string | undefined) => void;
   busy: boolean;
+  fundMode?: "wallet" | "direct";
+  onFundMode?: (m: "wallet" | "direct") => void;
 }) {
-  const [amount, setAmount] = useState("1.5");
+  const [amount, setAmount] = useState("3");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [mode, setMode] = useState<"wallet" | "direct">("wallet");
+  const mode = fundMode ?? "wallet";
+  const setMode = onFundMode ?? (() => {});
 
   // one funding action is capped server-side; say so here rather than letting
   // someone type 500 and get a 400 back
   const MAX_PER_CALL = 10;
+  const MIN_FUND = 2;
   const tinybar = Math.round(parseFloat(amount || "0") * 1e8);
   const over = tinybar > MAX_PER_CALL * 1e8;
+  const under = tinybar > 0 && tinybar < MIN_FUND * 1e8;
   const accountId = wallet?.accountId ?? null;
 
   return (
@@ -244,10 +249,18 @@ function Money({
               amounts, as many times as you need.
             </div>
           )}
+          {under && (
+            <div className="ws-shortfall" style={{ marginTop: 9 }}>
+              The smallest useful amount is {MIN_FUND} &#8462;. Less than that will
+              not cover a single session.
+            </div>
+          )}
           <button className="ws-btn ws-btn-primary" style={{ marginTop: 11, width: "100%" }}
-                  disabled={busy || !(tinybar > 0) || over}
+                  disabled={busy || !(tinybar > 0) || over || under}
                   onClick={() => onFundDirect(tinybar)}>
-            {over ? `Over the ${MAX_PER_CALL} \u210f limit` : `Send ${hbar(tinybar)} to the agent`}
+            {over ? `Over the ${MAX_PER_CALL} \u210f limit`
+                  : under ? `Minimum ${MIN_FUND} \u210f`
+                  : `Send ${hbar(tinybar)} to the agent`}
           </button>
         </>
       )}
@@ -352,7 +365,7 @@ function Session({ chat }: { chat: Chat | null }) {
 
 export function Panel({
   chat, wallet, tab, setTab, urlFor, onFundDirect, onFundSigned, onWithdraw, busy, onClose,
-  onOpen, needs,
+  onOpen, needs, fundMode, onFundMode,
 }: {
   onOpen: (a: Asset) => void;
   chat: Chat | null; wallet: Wallet | null;
@@ -362,6 +375,8 @@ export function Panel({
   onFundSigned: (from: string, t: number) => void;
   onWithdraw: (t: number | undefined, to: string | undefined) => void;
   busy: boolean; onClose: () => void; needs: number | null;
+  fundMode?: "wallet" | "direct";
+  onFundMode?: (m: "wallet" | "direct") => void;
 }) {
   return (
     <aside className="ws-panel">
@@ -381,7 +396,8 @@ export function Panel({
       <div className="ws-panel-body">
         {tab === "Wallet" && (
           <Money wallet={wallet} onFundDirect={onFundDirect} onFundSigned={onFundSigned}
-                 onWithdraw={onWithdraw} busy={busy} needs={needs} />
+                 onWithdraw={onWithdraw} busy={busy} needs={needs}
+                 fundMode={fundMode} onFundMode={onFundMode} />
         )}
         {tab === "Files" && (
           <Files assets={chat?.assets ?? []} artifacts={chat?.artifacts ?? []}

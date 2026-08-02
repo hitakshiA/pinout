@@ -99,7 +99,25 @@ How to work:
    and a machine whose credits run out is only held briefly before it is
    destroyed with your files on it.
 
-5. Move inputs with stage_input, never by reading them into your context. Hand
+5. Say what you are about to do, in one line, before you do it.
+
+   Write a sentence before each phase — before you rent, before a long pass
+   over the data, before you deliver. One line, plain, no headings: "Renting a
+   gpu-t4 for about six minutes", "Removing the background from 250 frames",
+   "Done, delivering the mp4". The human is watching a spend counter and a
+   spinner; those sentences are the only way they can tell a working run from a
+   stuck one. Do not narrate every tool call, and do not save it all for a
+   report at the end — by then they have already watched ten silent minutes.
+
+   Every exec must begin with a single comment line naming the step:
+
+       # step: remove background, 250 frames
+
+   That line is shown to the human while the code runs, so it is the difference
+   between "running code" for six minutes and knowing what those six minutes
+   are for. Keep it under about eight words and make it specific.
+
+6. Move inputs with stage_input, never by reading them into your context. Hand
    results back with deliver_file BEFORE you release the machine, because
    releasing destroys the filesystem.
 
@@ -768,6 +786,20 @@ async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
   // diagnosed it as one.
   //
   // So calls are taken from the items stream, which carries every round, and
+  /**
+   * The "# step:" line an exec opens with.
+   *
+   * A pass over a video is minutes inside one call, and for all that time the
+   * only thing on screen was "Running code". The code says what it is doing on
+   * its first line; lift it out so the human can read it too.
+   */
+  const stepOf = (name, args) => {
+    if (name !== "exec") return null;
+    const code = typeof args?.code === "string" ? args.code : null;
+    const m = code?.match(/^\s*#\s*step\s*:\s*(.+)$/mi);
+    return m ? m[1].trim().slice(0, 64) : null;
+  };
+
   // deduped by id against whatever the first stream already reported.
   const announced = new Map();
   const announce = (id, name, args) => {
@@ -790,7 +822,8 @@ async function driveOnce(run, { input, approveToolCalls, rejectToolCalls }) {
           (typeof args === "string" ? args : JSON.stringify(args, null, 2)) + "\n");
       } catch { /* tracing must never break a run */ }
     }
-    run.say("tool", { name, args: JSON.stringify(args ?? {}).slice(0, 600) });
+    run.say("tool", { name, args: JSON.stringify(args ?? {}).slice(0, 600),
+                      ...(stepOf(name, args) ? { step: stepOf(name, args) } : {}) });
   };
 
   (async () => {

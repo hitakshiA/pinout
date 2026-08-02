@@ -52,6 +52,8 @@ export default function Workspace() {
 
   const [sideOpen, setSideOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [needsFunding, setNeedsFunding] = useState(false);
+  const [fundMode, setFundMode] = useState<"wallet" | "direct">("direct");
   // below 1240 the rails float over the transcript rather than squeezing it
   const [floating, setFloating] = useState(false);
   useEffect(() => {
@@ -240,8 +242,13 @@ export default function Workspace() {
         break;
       }
       case "tool": {
-        // attach to the sentence it belongs to, and say what is running now
-        setWorking({ what: doing(String(ev.name ?? "")), since: Date.now() });
+        // attach to the sentence it belongs to, and say what is running now.
+        // An exec carries the step it opened with, which is the difference
+        // between "running code" for six minutes and knowing what for.
+        setWorking({
+          what: doing(String(ev.name ?? "")) + (ev.step ? ` · ${String(ev.step)}` : ""),
+          since: Date.now(),
+        });
         setBlocks((b) => {
           const copy = [...b];
           for (let i = copy.length - 1; i >= 0; i--) {
@@ -437,8 +444,22 @@ export default function Workspace() {
     else { setPanelOpen(true); setTab("Files"); }
   };
 
+  /**
+   * The agent pays for its own compute, so a task with no money behind it does
+   * not fail politely — it starts, rents nothing, and stops to ask. Better to
+   * say so before the work begins than to let someone watch a run that was
+   * never going to get anywhere.
+   */
+  const MIN_START_TINYBAR = 200_000_000;   // 2 HBAR, the same floor the club enforces
+
   const send = async () => {
     if (!ws || !chatId || (!draft.trim() && !pending.length) || busy || running) return;
+    if ((wallet?.tinybar ?? 0) < MIN_START_TINYBAR) {
+      setNeedsFunding(true);
+      setPanelOpen(true);
+      setTab("Wallet");
+      return;
+    }
     setBusy(true);
     try {
       const sent: Attached[] = [];
@@ -745,6 +766,38 @@ export default function Workspace() {
           {floating && (panelOpen || !sideOpen) && panelOpen && (
             <div className="ws-scrim" onClick={() => setPanelOpen(false)} />
           )}
+          {needsFunding && (
+            <>
+              <div className="ws-scrim" onClick={() => setNeedsFunding(false)} />
+              <div className="ws-fundgate" role="dialog" aria-modal="true"
+                   aria-labelledby="fundgate-title">
+                <div className="ws-fundgate-title" id="fundgate-title">
+                  Give the agent some HBAR first
+                </div>
+                <p className="ws-fundgate-body">
+                  It rents its own machine and pays for it by the second, so it needs
+                  a balance before it can start. Unused HBAR comes back to you when
+                  the job ends, and you can take it back at any time.
+                </p>
+                <div className="ws-fundgate-min">Minimum 2 &#8462; &middot; maximum 10 &#8462; per transfer</div>
+                <div className="ws-fundgate-arrow" aria-hidden="true">
+                  Fund it in the Wallet panel &rarr;
+                </div>
+                <div className="ws-fundgate-acts">
+                  <button className="ws-btn ws-btn-primary"
+                          onClick={() => { setNeedsFunding(false); setPanelOpen(true);
+                                           setTab("Wallet"); setFundMode("direct"); }}>
+                    Send directly
+                  </button>
+                  <button className="ws-btn"
+                          onClick={() => { setNeedsFunding(false); setPanelOpen(true);
+                                           setTab("Wallet"); setFundMode("wallet"); }}>
+                    Connect a wallet
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
           {local && (
             <Preview asset={local.asset} url={local.url}
                      onClose={() => setLocal(null)} />
@@ -759,6 +812,7 @@ export default function Workspace() {
                    onFundDirect={money.fundDirect} onFundSigned={money.fundSigned}
                    onWithdraw={money.withdraw} busy={busy}
                    needs={needs} onOpen={(a) => setPreview(a)}
+                   fundMode={fundMode} onFundMode={setFundMode}
                    onClose={() => setPanelOpen(false)} />
           )}
         </div>

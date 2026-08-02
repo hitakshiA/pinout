@@ -22,8 +22,15 @@ import {
 import { randomUUID } from "node:crypto";
 import { env, mirror } from "../src/config.mjs";
 
-/** Never create an account without enough to exist and pay a fee or two. */
-export const MIN_FUND_TINYBAR = 100_000_000;   // 1 HBAR
+/**
+ * The least a funding action may move.
+ *
+ * A Hedera account needs enough to exist and pay a fee or two, but the real
+ * floor is the job: a wallet with one HBAR cannot cover a single CPU rental
+ * plus its top-ups, so the agent starts work it has to stop and beg for. Two
+ * buys a whole cpu-4 session with room to spare.
+ */
+export const MIN_FUND_TINYBAR = 200_000_000;   // 2 HBAR
 /** Refuse to custody more than this per workspace on testnet. */
 const MAX_FUND_TINYBAR = 5_000_000_000;    // 50 HBAR
 /**
@@ -39,6 +46,11 @@ export const MAX_FUND_PER_CALL_TINYBAR = 1_000_000_000;   // 10 HBAR
 export function assertFundable(tinybar) {
   const n = Number(tinybar);
   if (!Number.isFinite(n) || n <= 0) throw new Error("give an amount in tinybar");
+  if (n < MIN_FUND_TINYBAR) {
+    throw new Error(
+      `the smallest useful funding is ${MIN_FUND_TINYBAR / 1e8} \u210f ` +
+      `(asked for ${(n / 1e8).toFixed(4)} \u210f). Less than that cannot pay for a session.`);
+  }
   if (n > MAX_FUND_PER_CALL_TINYBAR) {
     throw new Error(
       `one funding action is capped at ${MAX_FUND_PER_CALL_TINYBAR / 1e8} ℏ ` +
@@ -260,4 +272,5 @@ export const CUSTODY_DISCLOSURE = {
   notForMainnet: true,
   maxTinybar: MAX_FUND_TINYBAR,
   maxPerCallTinybar: MAX_FUND_PER_CALL_TINYBAR,
+  minTinybar: MIN_FUND_TINYBAR,
 };
